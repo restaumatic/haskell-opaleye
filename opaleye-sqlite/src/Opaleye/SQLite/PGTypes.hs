@@ -98,7 +98,7 @@ pgDay :: Time.Day -> Column PGDate
 pgDay = IPT.unsafePgFormatTime "date" "'%0Y-%m-%d'"
 
 pgUTCTime :: Time.UTCTime -> Column PGTimestamptz
-pgUTCTime = IPT.unsafePgFormatTime "timestamptz" "'%0Y-%m-%dT%T%QZ'"
+pgUTCTime = IPT.unsafePgFormatTime "timestamptz" "'%0Y-%m-%dT%TZ'"
 
 pgLocalTime :: Time.LocalTime -> Column PGTimestamp
 pgLocalTime = IPT.unsafePgFormatTime "timestamp" "'%0Y-%m-%dT%T'"
