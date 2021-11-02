@@ -1,5 +1,4 @@
-resolver: lts-12.1
+resolver: lts-18.1
 extra-deps:
-- aeson-1.2.4.0
-- multiset-0.3.4.1
-- base-compat-0.9.3
+  - base16-bytestring-0.1.1.7@sha256:0021256a9628971c08da95cb8f4d0d72192f3bb8a7b30b55c080562d17c43dd3,2231
+  - profunctors-5.5.2@sha256:0d824ae4b7cdde33ec4c677ded9e373e057c3a8e2c6b0532c183f9413db6e32c,2176
