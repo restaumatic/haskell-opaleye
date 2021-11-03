@@ -1,31 +1,31 @@
-{-# LANGUAGE EmptyDataDecls #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE EmptyDataDecls       #-}
+{-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
 module Opaleye.Internal.PGTypesExternal
   (module Opaleye.Internal.PGTypesExternal, IsSqlType(..)) where
 
-import           Opaleye.Internal.Column (Column)
-import qualified Opaleye.Internal.Column as C
-import qualified Opaleye.Internal.PGTypes as IPT
-import           Opaleye.Internal.PGTypes (IsSqlType(..))
+import           Opaleye.Internal.Column                (Column)
+import qualified Opaleye.Internal.Column                as C
+import           Opaleye.Internal.PGTypes               (IsSqlType (..))
+import qualified Opaleye.Internal.PGTypes               as IPT
 
-import qualified Opaleye.Internal.HaskellDB.PrimQuery as HPQ
+import qualified Opaleye.Internal.HaskellDB.PrimQuery   as HPQ
 import qualified Opaleye.Internal.HaskellDB.Sql.Default as HSD
 
-import qualified Data.CaseInsensitive as CI
-import qualified Data.Aeson as Ae
-import qualified Data.Text as SText
-import qualified Data.Text.Lazy as LText
-import qualified Data.ByteString as SByteString
-import qualified Data.ByteString.Lazy as LByteString
-import           Data.Scientific as Sci
-import qualified Data.Time as Time
-import qualified Data.UUID as UUID
+import qualified Data.Aeson                             as Ae
+import qualified Data.ByteString                        as SByteString
+import qualified Data.ByteString.Lazy                   as LByteString
+import qualified Data.CaseInsensitive                   as CI
+import           Data.Scientific                        as Sci
+import qualified Data.Text                              as SText
+import qualified Data.Text.Lazy                         as LText
+import qualified Data.Time                              as Time
+import qualified Data.UUID                              as UUID
 
-import           Data.Int (Int64)
+import           Data.Int                               (Int64)
 
-import qualified Database.PostgreSQL.Simple.Range as R
+import qualified Database.PostgreSQL.Simple.Range       as R
 
 instance C.SqlNum SqlFloat8 where
   sqlFromInteger = pgDouble . fromInteger
@@ -89,16 +89,16 @@ pgUUID :: UUID.UUID -> Column PGUuid
 pgUUID = IPT.literalColumn . HPQ.StringLit . UUID.toString
 
 pgDay :: Time.Day -> Column PGDate
-pgDay = IPT.unsafePgFormatTime "date" "'%F'"
+pgDay = IPT.unsafePgFormatTime "date" "'%0Y-%m-%d'"
 
 pgUTCTime :: Time.UTCTime -> Column PGTimestamptz
-pgUTCTime = IPT.unsafePgFormatTime "timestamptz" "'%FT%T%QZ'"
+pgUTCTime = IPT.unsafePgFormatTime "timestamptz" "'%0Y-%m-%dT%T%QZ'"
 
 pgLocalTime :: Time.LocalTime -> Column PGTimestamp
-pgLocalTime = IPT.unsafePgFormatTime "timestamp" "'%FT%T%Q'"
+pgLocalTime = IPT.unsafePgFormatTime "timestamp" "'%0Y-%m-%dT%T%Q'"
 
 pgZonedTime :: Time.ZonedTime -> Column PGTimestamptz
-pgZonedTime = IPT.unsafePgFormatTime "timestamptz" "'%FT%T%Q%z'"
+pgZonedTime = IPT.unsafePgFormatTime "timestamptz" "'%0Y-%m-%dT%T%Q%z'"
 
 pgTimeOfDay :: Time.TimeOfDay -> Column PGTime
 pgTimeOfDay = IPT.unsafePgFormatTime "time" "'%T%Q'"
