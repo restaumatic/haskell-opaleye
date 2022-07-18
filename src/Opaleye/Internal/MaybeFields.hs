@@ -16,14 +16,12 @@ import           Control.Arrow (returnA, (<<<), (>>>))
 import qualified Opaleye.Internal.Binary as B
 import qualified Opaleye.Internal.Column as IC
 import qualified Opaleye.ToFields as Constant
-import qualified Opaleye.Internal.PackMap as PM
 import qualified Opaleye.Internal.HaskellDB.PrimQuery as HPQ
 import           Opaleye.Internal.Inferrable (Inferrable(Inferrable),
                                               runInferrable)
-import qualified Opaleye.Internal.PrimQuery as PQ
 import qualified Opaleye.Internal.QueryArr as IQ
+import qualified Opaleye.Internal.Rebind as Rebind
 import qualified Opaleye.Internal.RunQuery as RQ
-import qualified Opaleye.Internal.Tag as Tag
 import qualified Opaleye.Internal.Unpackspec as U
 import qualified Opaleye.Internal.Values as V
 import           Opaleye.Select (Select, SelectArr)
@@ -34,7 +32,7 @@ import           Opaleye.Internal.Operators ((.&&), (.||), (.==), restrict, not,
                                              ifExplict, IfPP, EqPP(EqPP))
 import qualified Opaleye.Internal.Lateral
 import qualified Opaleye.SqlTypes
-import           Opaleye.SqlTypes (SqlBool, IsSqlType)
+import           Opaleye.SqlTypes (SqlBool, IsSqlType, SqlInt4)
 
 import           Control.Monad (replicateM_)
 
@@ -91,6 +89,18 @@ justFields = pure
 maybeFields :: PP.Default IfPP b b => b -> (a -> b) -> MaybeFields a -> b
 maybeFields = maybeFieldsExplicit PP.def
 
+-- | Use a Haskell @\\case@ expression to pattern match on a
+-- 'MaybeFields'.
+--
+-- @
+-- example :: MaybeFields (Field SqlInt4) -> Field SqlInt4
+-- example mf = matchMaybe mf $ \\case
+--   Nothing -> 0
+--   Just x  -> x * 100
+-- @
+matchMaybe :: PP.Default IfPP b b => MaybeFields a -> (Maybe a -> b) -> b
+matchMaybe mf f = maybeFields (f Nothing) (f . Just) mf
+
 -- | The Opaleye analogue of 'Data.Maybe.fromMaybe'
 fromMaybeFields :: PP.Default IfPP b b => b -> MaybeFields b -> b
 fromMaybeFields = fromMaybeFieldsExplicit PP.def
@@ -124,25 +134,19 @@ traverseMaybeFields query = proc mfInput -> do
   where a `implies` b = Opaleye.Internal.Operators.not a .|| b
 
 optional :: SelectArr i a -> SelectArr i (MaybeFields a)
-optional = Opaleye.Internal.Lateral.laterally optionalSelect
-  where
+optional = Opaleye.Internal.Lateral.laterally (optionalInternal (MaybeFields . isNotNull))
+  where isNotNull = Opaleye.Internal.Operators.not . Opaleye.Field.isNull
+
+optionalInternal :: (Field (Opaleye.Column.Nullable SqlBool) -> a -> r) -> Select a -> Select r
+optionalInternal f query = IQ.leftJoinQueryArr $ \arg ->
     -- This is basically a left join on TRUE, but Shane (@duairc)
     -- wrote it to ensure that we don't need an Unpackspec a a.
-    optionalSelect :: Select a -> Select (MaybeFields a)
-    optionalSelect = IQ.QueryArr . go
-
-    go query ((), left, tag) = (MaybeFields present a, join, Tag.next tag')
-      where
-        (MaybeFields t a, right, tag') =
-          IQ.runSimpleQueryArr (justFields <$> query) ((), tag)
-
-        present = isNotNull (IC.unsafeCoerceColumn t')
-
-        (t', bindings) =
-          PM.run (U.runUnpackspec U.unpackspecField (PM.extractAttr "maybe" tag') t)
-        join = PQ.Join PQ.LeftJoin true [] bindings left right
-    true = HPQ.ConstExpr (HPQ.BoolLit True)
-    isNotNull = Opaleye.Internal.Operators.not . Opaleye.Field.isNull
+    let (r, right, tag') = flip IQ.runSimpleQueryArr arg $ proc () -> do
+          a <- query -< ()
+          true_ <- Rebind.rebind -< Opaleye.Column.toNullable (IC.Column true)
+          returnA -< f true_ a
+        true = HPQ.ConstExpr (HPQ.BoolLit True)
+    in (r, true, right, tag')
 
 
 -- | An example to demonstrate how the functionality of (lateral)

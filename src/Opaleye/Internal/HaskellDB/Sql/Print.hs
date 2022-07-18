@@ -9,6 +9,7 @@ module Opaleye.Internal.HaskellDB.Sql.Print (
                                      ppUpdate,
                                      ppDelete,
                                      ppInsert,
+                                     ppValues_,
                                      ppSqlExpr,
                                      ppWhere,
                                      ppGroupBy,
@@ -79,9 +80,9 @@ ppSqlDistinct :: Sql.SqlDistinct -> Doc
 ppSqlDistinct Sql.SqlDistinct = text "DISTINCT"
 ppSqlDistinct Sql.SqlNotDistinct = empty
 
-ppAs :: Maybe String -> Doc -> Doc
-ppAs Nothing      expr = expr
-ppAs (Just alias) expr = expr <+> hsep [text "as", doubleQuotes (text alias)]
+ppAs :: Doc -> Maybe String -> Doc
+ppAs expr Nothing      = expr
+ppAs expr (Just alias) = expr <+> hsep [text "as", doubleQuotes (text alias)]
 
 
 ppUpdate :: SqlUpdate -> Doc
@@ -106,9 +107,11 @@ ppInsert :: SqlInsert -> Doc
 ppInsert (SqlInsert table names values onConflict)
     = text "INSERT INTO" <+> ppTable table
       <+> parens (commaV ppColumn names)
-      $$ text "VALUES" <+> commaV (parens . commaV ppSqlExpr)
-                                  (NEL.toList values)
+      $$ ppValues_ (NEL.toList values)
       <+> ppConflictStatement onConflict
+
+ppValues_ :: [[SqlExpr]] -> Doc
+ppValues_ v = text "VALUES" $$ commaV (parens . commaH ppSqlExpr) v
 
 -- If we wanted to make the SQL slightly more readable this would be
 -- one easy place to do it.  Currently we wrap all column references

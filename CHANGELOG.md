@@ -1,3 +1,47 @@
+## 0.7.6.2
+
+Fix ISO 8601 date fomatting.  Thanks to Michal @kozak.
+
+## 0.7.6.1
+
+No user-visible changes
+
+## 0.7.6.0
+
+* Added `matchMaybe`
+
+* Added `SqlVarcharN` and supporting functions
+
+## 0.7.5.0
+
+* Added `enumMapperWithSchema`.  Thanks to Steve Mao.
+
+* Added `SqlInterval`.  Thanks to Bas van Dijk.
+
+## 0.7.4.0
+
+* Added `distinctOnCorrect` and `distinctOnByCorrect` which will
+  replace `distinctOn` and `distinctOnBy` in a future version.
+
+## 0.7.3.0
+
+* Added DefaultFromField SqlJson(b) instances for Strict/Lazy
+  Text/ByteString. Thanks to Nathan Jaremko.
+
+## 0.7.2.0
+
+* Added `jsonAgg`, `jsonBuildObject` and `jsonBuildObjectField`.  Thanks
+  to Nathan Jaremko.
+
+* Added `now` function. Thanks to Nathan Jaremko.
+
+* Added `Opaleye.Exists.exists`. Thanks to @duairc.
+
+* Added `Opaleye.Experimental.Enum`
+
+* Added `Opaleye.Operators.array_position` and
+  `Opaleye.Operators.sqlElem`.  Thanks to Ashesh Ambasta.
+
 ## 0.7.1.0
 
 * Added `Opaleye.Experimental.Enum` for an easy way to deal with

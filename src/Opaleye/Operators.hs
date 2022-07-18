@@ -2,20 +2,128 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
 
--- | Operators on 'Column's.  Please note that numeric 'Column' types
--- are instances of 'Num', so you can use '*', '/', '+', '-' on them.
+-- We can probably disable ConstraintKinds and TypeSynonymInstances
+-- when we move to Sql... instead of PG..
 
-module Opaleye.Operators where
+module Opaleye.Operators
+  (
+  -- * Restriction operators
+    where_
+  , restrict
+  , restrictExists
+  , restrictNotExists
+  -- * Numerical operators
+  -- | Numeric 'Column' / 'F.Field' types are instances of 'Num'
+  -- and 'Fractional', so you can use the standard Haskell numerical
+  -- operators (e.g.. '*', '/', '+', '-') on them and you can create
+  -- them with numerical literals such as @3.14 :: 'F.Field' 'T.SqlFloat8'@.
+  , (+)
+  , (-)
+  , (*)
+  , (/)
+  , fromInteger
+  , abs
+  , negate
+  , signum
+  -- * Equality operators
+  , (.==)
+  , (./=)
+  , (.===)
+  , (./==)
+  -- * Comparison operators
+  , (.>)
+  , (.<)
+  , (.<=)
+  , (.>=)
+  -- * Numerical operators
+  , quot_
+  , rem_
+  -- * Conditional operators
+  , case_
+  , ifThenElse
+  , ifThenElseMany
+  -- * Logical operators
+  , (.||)
+  , (.&&)
+  , not
+  , ors
+  -- * Text operators
+  , (.++)
+  , lower
+  , upper
+  , like
+  , ilike
+  , charLength
+  , sqlLength
+  -- * Containment operators
+  , in_
+  , inSelect
+  -- * JSON operators
+  , SqlIsJson
+  , PGIsJson
+  , SqlJsonIndex
+  , PGJsonIndex
+  , (.->)
+  , (.->>)
+  , (.#>)
+  , (.#>>)
+  , (.@>)
+  , (.<@)
+  , (.?)
+  , (.?|)
+  , (.?&)
+  , JBOF.jsonBuildObject
+  , JBOF.jsonBuildObjectField
+  , JBOF.JSONBuildObjectFields
+  -- * SqlArray operators
+  , emptyArray
+  , arrayAppend
+  , arrayPrepend
+  , arrayRemove
+  , arrayRemoveNulls
+  , singletonArray
+  , index
+  , arrayPosition
+  , sqlElem
+  -- * Range operators
+  , overlap
+  , liesWithin
+  , upperBound
+  , lowerBound
+  , (.<<)
+  , (.>>)
+  , (.&<)
+  , (.&>)
+  , (.-|-)
+  -- * Other operators
+  , timestamptzAtTimeZone
+  , dateOfTimestamp
+  , now
+  , IntervalNum
+  , addInterval
+  , minusInterval
+  -- * Deprecated
+  , exists
+  , notExists
+  , inQuery
+  , keepWhen
+  )
+
+  where
 
 import qualified Control.Arrow as A
 import qualified Data.Foldable as F
 import qualified Data.List.NonEmpty as NEL
-
+import           Prelude hiding (not)
+import qualified Opaleye.Exists as E
 import qualified Opaleye.Field as F
 import           Opaleye.Internal.Column (Column(Column), unsafeCase_,
                                           unsafeIfThenElse, unsafeGt)
 import qualified Opaleye.Internal.Column as C
+import qualified Opaleye.Internal.JSONBuildObjectFields as JBOF
 import           Opaleye.Internal.QueryArr (SelectArr(QueryArr),
                                             Query, QueryArr, runSimpleQueryArr)
 import qualified Opaleye.Internal.PrimQuery as PQ
@@ -27,17 +135,10 @@ import qualified Opaleye.Select   as S
 import qualified Opaleye.SqlTypes as T
 
 import qualified Opaleye.Column   as Column
-import qualified Opaleye.Distinct as Distinct
-import qualified Opaleye.Join as Join
 
 import qualified Opaleye.Internal.HaskellDB.PrimQuery as HPQ
 
 import qualified Data.Profunctor.Product.Default as D
-
--- ^ We can probably disable ConstraintKinds and TypeSynonymInstances
--- when we move to Sql... instead of PG..
-
--- * Restriction operators
 
 {-| Keep only the rows of a query satisfying a given condition, using an
 SQL @WHERE@ clause.  It is equivalent to the Haskell function
@@ -60,16 +161,18 @@ restrict = O.restrict
 {-| Add a @WHERE EXISTS@ clause to the current query. -}
 restrictExists :: S.SelectArr a b -> S.SelectArr a ()
 restrictExists criteria = QueryArr f where
-  f (a, primQ, t0) = ((), PQ.exists primQ existsQ, t1) where
+  -- A where exists clause can always refer to columns defined by the
+  -- query it references so needs no special treatment on LATERAL.
+  f (a, t0) = ((), \_ primQ -> PQ.Semijoin PQ.Semi primQ existsQ, t1) where
     (_, existsQ, t1) = runSimpleQueryArr criteria (a, t0)
 
 {-| Add a @WHERE NOT EXISTS@ clause to the current query. -}
 restrictNotExists :: S.SelectArr a b -> S.SelectArr a ()
 restrictNotExists criteria = QueryArr f where
-  f (a, primQ, t0) = ((), PQ.notExists primQ existsQ, t1) where
+  -- A where exists clause can always refer to columns defined by the
+  -- query it references so needs no special treatment on LATERAL.
+  f (a, t0) = ((), \_ primQ -> PQ.Semijoin PQ.Anti primQ existsQ, t1) where
     (_, existsQ, t1) = runSimpleQueryArr criteria (a, t0)
-
--- * Equality operators
 
 infix 4 .==
 (.==) :: Column a -> Column a -> F.Field T.SqlBool
@@ -93,8 +196,6 @@ infix 4 ./==
 (./==) :: D.Default O.EqPP fields fields => fields -> fields -> F.Field T.SqlBool
 (./==) = Opaleye.Operators.not .: (O..==)
 
--- * Comparison operators
-
 infix 4 .>
 (.>) :: Ord.SqlOrd a => Column a -> Column a -> F.Field T.SqlBool
 (.>) = unsafeGt
@@ -111,8 +212,6 @@ infix 4 .>=
 (.>=) :: Ord.SqlOrd a => Column a -> Column a -> F.Field T.SqlBool
 (.>=) = C.binOp (HPQ.:>=)
 
--- * Numerical operators
-
 -- | Integral division, named after 'Prelude.quot'.  It maps to the
 -- @/@ operator in Postgres.
 quot_ :: C.SqlIntegral a => Column a -> Column a -> Column a
@@ -123,8 +222,6 @@ quot_ = C.binOp (HPQ.:/)
 -- "modulo (remainder)".
 rem_ :: C.SqlIntegral a => Column a -> Column a -> Column a
 rem_ = C.binOp HPQ.OpMod
-
--- * Conditional operators
 
 -- | Select the first case for which the condition is true.
 case_ :: [(F.Field T.SqlBool, Column a)] -> Column a -> Column a
@@ -143,8 +240,6 @@ ifThenElseMany :: D.Default O.IfPP fields fields
                -> fields
                -> fields
 ifThenElseMany = O.ifExplict D.def
-
--- * Logical operators
 
 infixr 2 .||
 
@@ -165,8 +260,6 @@ not = O.not
 -- | True when any element of the container is true
 ors :: F.Foldable f => f (F.Field T.SqlBool) -> F.Field T.SqlBool
 ors = F.foldl' (.||) (T.sqlBool False)
-
--- * Text operators
 
 -- | Concatenate 'F.Field' 'T.SqlText'
 (.++) :: F.Field T.SqlText -> F.Field T.SqlText -> F.Field T.SqlText
@@ -197,8 +290,6 @@ charLength (Column e) = Column (HPQ.FunExpr "char_length" [e])
 sqlLength :: C.PGString a => F.Field a -> F.Field T.SqlInt4
 sqlLength  (Column e) = Column (HPQ.FunExpr "length" [e])
 
--- * Containment operators
-
 -- | 'in_' is designed to be used in prefix form.
 --
 -- 'in_' @validProducts@ @product@ checks whether @product@ is a valid
@@ -212,34 +303,10 @@ in_ fcas (Column a) = Column $ case NEL.nonEmpty (F.toList fcas) of
 -- | True if the first argument occurs amongst the rows of the second,
 -- false otherwise.
 --
--- This operation is equivalent to Postgres's @IN@ operator but, for
--- expediency, is currently implemented using a @LEFT JOIN@.  Please
--- file a bug if this causes any issues in practice.
+-- This operation is equivalent to Postgres's @IN@ operator.
 inSelect :: D.Default O.EqPP fields fields
          => fields -> S.Select fields -> S.Select (F.Field T.SqlBool)
-inSelect c q = qj'
-  where -- Remove every row that isn't equal to c
-        -- Replace the ones that are with '1'
-        q' = A.arr (const 1)
-             A.<<< keepWhen (c .===)
-             A.<<< q
-
-        -- Left join with a query that has a single row
-        -- We either get a single row with '1'
-        -- or a single row with 'NULL'
-        qj :: Query (F.Field T.SqlInt4, Column (C.Nullable T.SqlInt4))
-        qj = Join.leftJoin (A.arr (const 1))
-                           (Distinct.distinct q')
-                           (uncurry (.==))
-
-        -- Check whether it is 'NULL'
-        qj' :: Query (F.Field T.SqlBool)
-        qj' = A.arr (Opaleye.Operators.not
-                     . Column.isNull
-                     . snd)
-              A.<<< qj
-
--- * JSON operators
+inSelect c q = E.exists (keepWhen (c .===) A.<<< q)
 
 -- | Class of Postgres types that represent json values.
 -- Used to overload functions and operators that work on both 'T.SqlJson' and 'T.SqlJsonb'.
@@ -325,8 +392,6 @@ infix 4 .?&
       -> F.Field T.SqlBool
 (.?&) = C.binOp (HPQ.:?&)
 
--- * SqlArray operators
-
 emptyArray :: T.IsSqlType a => Column (T.SqlArray a)
 emptyArray = T.sqlArray id []
 
@@ -352,7 +417,20 @@ singletonArray x = arrayPrepend x emptyArray
 index :: (C.SqlIntegral n) => Column (T.SqlArray a) -> Column n -> Column (C.Nullable a)
 index (Column a) (Column b) = Column (HPQ.ArrayIndex a b)
 
--- * Range operators
+-- | Postgres's @array_position@
+arrayPosition :: F.Field (T.SqlArray a) -- ^ Haystack
+              -> F.Field a -- ^ Needle
+              -> F.Field (Column.Nullable T.SqlInt4)
+arrayPosition (Column fs) (Column f') =
+  C.Column (HPQ.FunExpr "array_position" [fs , f'])
+
+-- | Whether the element (needle) exists in the array (haystack).
+-- N.B. this is implemented hackily using @array_position@.  If you
+-- need it to be implemented using @= any@ then please open an issue.
+sqlElem :: F.Field a -- ^ Needle
+        -> F.Field (T.SqlArray a) -- ^ Haystack
+        -> F.Field T.SqlBool
+sqlElem f fs = (O.not . F.isNull . arrayPosition fs) f
 
 overlap :: Column (T.SqlRange a) -> Column (T.SqlRange a) -> F.Field T.SqlBool
 overlap = C.binOp (HPQ.:&&)
@@ -388,8 +466,6 @@ infix 4 .-|-
 (.-|-) :: Column (T.SqlRange a) -> Column (T.SqlRange a) -> F.Field T.SqlBool
 (.-|-) = C.binOp (HPQ.:-|-)
 
--- * Other operators
-
 timestamptzAtTimeZone :: F.Field T.SqlTimestamptz
                       -> F.Field T.SqlText
                       -> F.Field T.SqlTimestamp
@@ -398,7 +474,26 @@ timestamptzAtTimeZone = C.binOp HPQ.OpAtTimeZone
 dateOfTimestamp :: F.Field T.SqlTimestamp -> F.Field T.SqlDate
 dateOfTimestamp (Column e) = Column (HPQ.FunExpr "date" [e])
 
--- * Deprecated
+-- | @IntervalNum from to@ determines from which date or time types an interval
+-- can be added ('addInterval') or subtracted ('minusInterval`) and which is the
+-- resulting type.
+--
+-- The instances should correspond to the interval + and - operations listed in:
+--
+-- https://www.postgresql.org/docs/current/functions-datetime.html#OPERATORS-DATETIME-TABLE
+class IntervalNum from to | from -> to
+
+instance IntervalNum T.SqlDate        T.SqlTimestamp
+instance IntervalNum T.SqlInterval    T.SqlInterval
+instance IntervalNum T.SqlTimestamp   T.SqlTimestamp
+instance IntervalNum T.SqlTimestamptz T.SqlTimestamptz
+instance IntervalNum T.SqlTime        T.SqlTime
+
+addInterval :: IntervalNum from to => F.Field from -> F.Field T.SqlInterval -> F.Field to
+addInterval = C.binOp (HPQ.:+)
+
+minusInterval :: IntervalNum from to => F.Field from -> F.Field T.SqlInterval -> F.Field to
+minusInterval = C.binOp (HPQ.:-)
 
 {-# DEPRECATED exists "Identical to 'restrictExists'.  Will be removed in version 0.8." #-}
 exists :: QueryArr a b -> QueryArr a ()
@@ -430,3 +525,7 @@ keepWhen :: (a -> F.Field T.SqlBool) -> S.SelectArr a a
 keepWhen p = proc a -> do
   restrict  -< p a
   A.returnA -< a
+
+-- | Current date and time (start of current transaction)
+now :: F.Field T.SqlTimestamptz
+now = Column $ HPQ.FunExpr "now" []

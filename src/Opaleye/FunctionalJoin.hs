@@ -6,10 +6,12 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 
 module Opaleye.FunctionalJoin (
+  -- * Full outer join
+  fullJoinF,
+  -- ** Deprecated
   joinF,
   leftJoinF,
   rightJoinF,
-  fullJoinF,
   ) where
 
 import           Control.Applicative             ((<$>), (<*>))
@@ -28,6 +30,8 @@ import qualified Opaleye.Select                  as S
 import qualified Opaleye.SqlTypes                as T
 import qualified Opaleye.Operators               as O
 
+-- | Use 'Opaleye.Operators.where_' and @do@ notation instead.  Will
+-- be deprecated in 0.8.
 joinF :: (fieldsL -> fieldsR -> fieldsResult)
       -- ^ Calculate result fields from input fields
       -> (fieldsL -> fieldsR -> F.Field T.SqlBool)
@@ -40,6 +44,7 @@ joinF :: (fieldsL -> fieldsR -> fieldsResult)
 joinF f cond l r =
   fmap (uncurry f) (O.keepWhen (uncurry cond) <<< ((,) <$> l <*> r))
 
+-- | Use 'Opaleye.Join.optional' instead.  Will be deprecated in 0.8.
 leftJoinF :: (D.Default IO.IfPP fieldsResult fieldsResult,
               D.Default IU.Unpackspec fieldsL fieldsL,
               D.Default IU.Unpackspec fieldsR fieldsR)
@@ -71,6 +76,7 @@ leftJoinF f fL cond l r = fmap ret j
                                       (F.FieldNullable T.SqlBool)
         nullmakerBool = D.def
 
+-- | Use 'Opaleye.Join.optional' instead.  Will be deprecated in 0.8.
 rightJoinF :: (D.Default IO.IfPP fieldsResult fieldsResult,
                D.Default IU.Unpackspec fieldsL fieldsL,
                D.Default IU.Unpackspec fieldsR fieldsR)

@@ -67,7 +67,11 @@ offset' n (x, q, t) = (x, PQ.Limit (PQ.OffsetOp n) q, t)
 
 distinctOn :: U.Unpackspec b b -> (a -> b)
            -> (a, PQ.PrimQuery, T.Tag) -> (a, PQ.PrimQuery, T.Tag)
-distinctOn ups proj = distinctOnBy ups proj (Order $ const [])
+distinctOn ups proj = distinctOnBy ups proj M.mempty
+
+distinctOnCorrect :: U.Unpackspec b b -> (a -> b)
+                  -> (a, PQ.PrimQuery, T.Tag) -> (a, PQ.PrimQuery, T.Tag)
+distinctOnCorrect ups proj = distinctOnByCorrect ups proj M.mempty
 
 distinctOnBy :: U.Unpackspec b b -> (a -> b) -> Order a
              -> (a, PQ.PrimQuery, T.Tag) -> (a, PQ.PrimQuery, T.Tag)
@@ -75,6 +79,14 @@ distinctOnBy ups proj ord (cols, pq, t) = (cols, pqOut, t)
     where pqOut = case U.collectPEs ups (proj cols) of
             x:xs -> PQ.DistinctOnOrderBy (Just $ x NL.:| xs) (orderExprs cols ord) pq
             []   -> pq
+
+distinctOnByCorrect :: U.Unpackspec b b -> (a -> b) -> Order a
+             -> (a, PQ.PrimQuery, T.Tag) -> (a, PQ.PrimQuery, T.Tag)
+distinctOnByCorrect ups proj ord (cols, pq, t) = (cols, pqOut, t)
+    where pqOut = case U.collectPEs ups (proj cols) of
+            x:xs -> PQ.DistinctOnOrderBy (Just $ x NL.:| xs) oexprs pq
+            []   -> PQ.Limit (PQ.LimitOp 1) (PQ.DistinctOnOrderBy Nothing oexprs pq)
+          oexprs = orderExprs cols ord
 
 -- | Order the results of a given query exactly, as determined by the given list
 -- of input columns. Note that this list does not have to contain an entry for
