@@ -25,6 +25,7 @@ data Select = SelectFrom From
             | RelExpr HSql.SqlExpr
             -- ^ A relation-valued expression
             | SelectJoin Join
+            | SelectSemijoin Semijoin
             | SelectValues Values
             | SelectBinary Binary
             | SelectLabel Label
@@ -52,10 +53,16 @@ data From = From {
 
 data Join = Join {
   jJoinType   :: JoinType,
-  jTables     :: (Select, Select),
+  jTables     :: ((Lateral, Select), (Lateral, Select)),
   jCond       :: HSql.SqlExpr
   }
                 deriving Show
+
+data Semijoin = Semijoin
+  { sjType     :: SemijoinType
+  , sjTable    :: Select
+  , sjCriteria :: Select
+  } deriving Show
 
 data Values = Values {
   vAttrs  :: SelectAttrs,
@@ -69,6 +76,7 @@ data Binary = Binary {
 } deriving Show
 
 data JoinType = LeftJoin | RightJoin | FullJoin deriving Show
+data SemijoinType = Semi | Anti deriving Show
 data BinOp = Except | ExceptAll | Union | UnionAll | Intersect | IntersectAll deriving Show
 data Lateral = Lateral | NonLateral deriving Show
 data LockStrength = Update deriving Show
@@ -81,9 +89,8 @@ data Label = Label {
 data Returning a = Returning a (NEL.NonEmpty HSql.SqlExpr)
 
 data Exists = Exists
-  { existsBool :: Bool
+  { existsBinding :: Symbol
   , existsTable :: Select
-  , existsCriteria :: Select
   } deriving Show
 
 sqlQueryGenerator :: SG.SqlGenerator -> PQ.PrimQueryFold' V.Void Select
@@ -96,17 +103,18 @@ sqlQueryGenerator sqlGenerator = PQ.PrimQueryFold
   , PQ.distinctOnOrderBy = distinctOnOrderBy sqlGenerator
   , PQ.limit             = limit_
   , PQ.join              = join sqlGenerator
+  , PQ.semijoin          = semijoin
   , PQ.values            = values sqlGenerator
   , PQ.binary            = binary
   , PQ.label             = label
   , PQ.relExpr           = relExpr sqlGenerator
-  , PQ.existsf           = exists
+  , PQ.exists            = exists
   , PQ.rebind            = rebind sqlGenerator
   , PQ.forUpdate         = forUpdate
   }
 
-exists :: Bool -> Select -> Select -> Select
-exists b q1 q2 = SelectExists (Exists b q1 q2)
+exists :: Symbol -> Select -> Select
+exists binding table = SelectExists (Exists binding table)
 
 sql :: SG.SqlGenerator -> ([HPQ.PrimExpr], PQ.PrimQuery' V.Void, T.Tag) -> Select
 sql sqlGenerator (pes, pq, t) = SelectFrom $ newSelect { attrs = SelectAttrs (ensureColumns (makeAttrs pes))
@@ -214,19 +222,20 @@ limit_ lo s = SelectFrom $ newSelect { tables = oneTable s
 join :: SG.SqlGenerator
      -> PQ.JoinType
      -> HPQ.PrimExpr
-     -> PQ.Bindings HPQ.PrimExpr
-     -> PQ.Bindings HPQ.PrimExpr
+     -> (PQ.Lateral, Select)
+     -> (PQ.Lateral, Select)
      -> Select
-     -> Select
-     -> Select
-join sqlGenerator j cond pes1 pes2 s1 s2 =
+join sqlGenerator j cond s1 s2 =
   SelectJoin Join { jJoinType = joinType j
-                  , jTables   = (selectFrom pes1 s1, selectFrom pes2 s2)
+                  , jTables   = (Arr.first lat s1, Arr.first lat s2)
                   , jCond     = sqlExpr sqlGenerator cond }
-  where selectFrom pes s = SelectFrom $ newSelect {
-            attrs  = SelectAttrsStar (ensureColumns (map (sqlBinding sqlGenerator) pes))
-          , tables = oneTable s
-          }
+  where lat = \case
+          PQ.Lateral -> Lateral
+          PQ.NonLateral -> NonLateral
+
+semijoin :: PQ.SemijoinType -> Select -> Select -> Select
+semijoin t q1 q2 = SelectSemijoin (Semijoin (semijoinType t) q1 q2)
+
 
 -- Postgres seems to name columns of VALUES clauses "column1",
 -- "column2", ... . I'm not sure to what extent it is customisable or
@@ -248,6 +257,10 @@ joinType :: PQ.JoinType -> JoinType
 joinType PQ.LeftJoin = LeftJoin
 joinType PQ.RightJoin = RightJoin
 joinType PQ.FullJoin = FullJoin
+
+semijoinType :: PQ.SemijoinType -> SemijoinType
+semijoinType PQ.Semi = Semi
+semijoinType PQ.Anti = Anti
 
 binOp :: PQ.BinOp -> BinOp
 binOp o = case o of
@@ -274,9 +287,11 @@ newSelect = From {
 sqlExpr :: SG.SqlGenerator -> HPQ.PrimExpr -> HSql.SqlExpr
 sqlExpr = SG.sqlExpr
 
+sqlSymbol :: Symbol -> String
+sqlSymbol (Symbol sym t) = T.tagWith t sym
+
 sqlBinding :: SG.SqlGenerator -> (Symbol, HPQ.PrimExpr) -> (HSql.SqlExpr, Maybe HSql.SqlColumn)
-sqlBinding sqlGenerator (Symbol sym t, pe) =
-  (sqlExpr sqlGenerator pe, Just (HSql.SqlColumn (T.tagWith t sym)))
+sqlBinding sqlGenerator (s, pe) = (sqlExpr sqlGenerator pe, Just (HSql.SqlColumn (sqlSymbol s)))
 
 ensureColumns :: [(HSql.SqlExpr, Maybe a)]
              -> NEL.NonEmpty (HSql.SqlExpr, Maybe a)

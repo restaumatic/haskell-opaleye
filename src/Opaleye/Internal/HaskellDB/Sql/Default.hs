@@ -230,6 +230,7 @@ showAggrOp AggrVarP           = "VarP"
 showAggrOp AggrBoolAnd        = "BOOL_AND"
 showAggrOp AggrBoolOr         = "BOOL_OR"
 showAggrOp AggrArr            = "ARRAY_AGG"
+showAggrOp JsonArr            = "JSON_AGG"
 showAggrOp (AggrStringAggr _) = "STRING_AGG"
 showAggrOp (AggrOther s)      = s
 

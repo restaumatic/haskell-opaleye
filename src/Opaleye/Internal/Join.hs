@@ -13,6 +13,7 @@ import qualified Opaleye.Internal.QueryArr as Q
 import qualified Opaleye.Internal.Operators as Op
 import qualified Opaleye.Internal.PrimQuery as PQ
 import qualified Opaleye.Internal.PGTypesExternal as T
+import qualified Opaleye.Internal.Rebind as Rebind
 import qualified Opaleye.SqlTypes as T
 import qualified Opaleye.Column as C
 import           Opaleye.Field   (Field)
@@ -63,37 +64,25 @@ joinExplicit uA uB returnColumnsA returnColumnsB joinType
           nullableColumnsB = returnColumnsB newColumnsB
 
           Column cond' = cond (columnsA, columnsB)
-          primQueryR = PQ.Join joinType cond' ljPEsA ljPEsB primQueryA primQueryB
+          primQueryR = PQ.Join joinType cond'
+                               (PQ.NonLateral, (PQ.Rebind True ljPEsA primQueryA))
+                               (PQ.NonLateral, (PQ.Rebind True ljPEsB primQueryB))
 
 leftJoinAExplicit :: U.Unpackspec a a
                   -> NullMaker a nullableA
                   -> Q.Query a
                   -> Q.QueryArr (a -> Column T.PGBool) nullableA
 leftJoinAExplicit uA nullmaker rq =
-  Q.QueryArr $ \(p, primQueryL, t1) ->
-    let (columnsR, primQueryR, t2) = Q.runSimpleQueryArr rq ((), t1)
-        (newColumnsR, ljPEsR) = PM.run $ U.runUnpackspec uA (extractLeftJoinFields 2 t2) columnsR
+  Q.leftJoinQueryArr $ \(p, t1) ->
+    let (newColumnsR, right, tag') = flip Q.runSimpleQueryArr ((), t1) $ proc () -> do
+          a <- rq -< ()
+          Rebind.rebindExplicit uA -< a
         renamedNullable = toNullable nullmaker newColumnsR
         Column cond = p newColumnsR
     in ( renamedNullable
-       , PQ.Join
-           PQ.LeftJoin
-           cond
-           []
-           --- ^ I am reasonably confident that we don't need any
-           --- column names here.  Columns that can become NULL need
-           --- to be written here so that we can wrap them.  If we
-           --- don't constant columns can avoid becoming NULL.
-           --- However, these are the left columns and cannot become
-           --- NULL in a left join, so we are fine.
-           ---
-           --- Report about the "avoiding NULL" bug:
-           ---
-           ---     https://github.com/tomjaguarpaw/haskell-opaleye/issues/223
-           ljPEsR
-           primQueryL
-           primQueryR
-       , T.next t2)
+       , cond
+       , right
+       , tag')
 
 optionalRestrict :: D.Default U.Unpackspec a a
                  => S.Select a

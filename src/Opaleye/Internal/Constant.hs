@@ -14,7 +14,7 @@ import qualified Data.Text.Lazy                  as LT
 import qualified Data.ByteString                 as SBS
 import qualified Data.ByteString.Lazy            as LBS
 import qualified Data.Scientific                 as Sci
-import qualified Data.Time                       as Time
+import qualified Data.Time.Compat                as Time
 import qualified Data.UUID                       as UUID
 
 import qualified Data.Profunctor.Product         as PP
@@ -68,6 +68,15 @@ instance D.Default ToFields ST.Text (Column T.SqlText) where
 instance D.Default ToFields LT.Text (Column T.SqlText) where
   def = toToFields T.sqlLazyText
 
+instance D.Default ToFields String (Column T.SqlVarcharN) where
+  def = toToFields T.sqlStringVarcharN
+
+instance D.Default ToFields ST.Text (Column T.SqlVarcharN) where
+  def = toToFields T.sqlStrictTextVarcharN
+
+instance D.Default ToFields LT.Text (Column T.SqlVarcharN) where
+  def = toToFields T.sqlLazyTextVarcharN
+
 instance D.Default ToFields Sci.Scientific (Column T.SqlNumeric) where
   def = toToFields T.sqlNumeric
 
@@ -104,6 +113,9 @@ instance D.Default ToFields Time.ZonedTime (Column T.SqlTimestamptz) where
 instance D.Default ToFields Time.TimeOfDay (Column T.SqlTime) where
   def = toToFields T.sqlTimeOfDay
 
+instance D.Default ToFields Time.CalendarDiffTime (Column T.SqlInterval) where
+  def = toToFields T.sqlInterval
+
 instance D.Default ToFields (CI.CI ST.Text) (Column T.SqlCitext) where
   def = toToFields T.sqlCiStrictText
 
@@ -129,7 +141,7 @@ instance D.Default ToFields Ae.Value (Column T.SqlJsonb) where
   def = toToFields T.sqlValueJSONB
 
 instance D.Default ToFields haskell (Column sql) => D.Default ToFields (Maybe haskell) (Maybe (Column sql)) where
-  def = toToFields (constant <$>)
+  def = toToFields (toFields <$>)
 
 instance (D.Default ToFields a (Column b), T.IsSqlType b)
          => D.Default ToFields [a] (Column (T.SqlArray b)) where

@@ -27,53 +27,21 @@ import qualified Data.Profunctor.Product.Default as D
 -- which provide APIs that are more familiar to a Haskell programmer
 -- and more composable:
 --
--- - Inner joins: use 'Opaleye.Operators.restrict' directly (along
---   with 'Control.Applicative.<*>' or arrow notation)
+-- - Inner joins: use 'Opaleye.Operators.where_' directly, along with
+--   @do@ notatation (or use 'Opaleye.Operators.restrict' directly,
+--   along with arrow notation)
 --
--- - Left/right joins: use 'optionalRestrict'
+-- - Left/right joins: use 'optional'
 --
--- - Lateral left/right joins: use 'optional'
+-- We suspect the following do not have real world use cases.  If you
+-- have one then we'd love to hear about it. Please [open a new issue
+-- on the Opaleye
+-- project](http://github.com/tomjaguarpaw/haskell-opaleye/issues/new)
+-- and tell us about it.
 --
--- - Full outer joins: use 'Opaleye.FunctionalJoin.fullJoinF' (If you
---   have a real-world use case for full outer joins then we'd love to
---   hear about it. Please [open a new issue on the Opaleye
---   project](http://github.com/tomjaguarpaw/haskell-opaleye/issues/new)
---   and tell us about it.)
-
--- | Convenient access to left/right join functionality.  Performs a
--- @LEFT JOIN@ under the hood and has behaviour equivalent to the
--- following Haskell function:
+-- - Left/right joins which really must not use @LATERAL@: use 'optionalRestrict'
 --
--- @
--- optionalRestrict :: [a] -> (a -> Bool) -> [Maybe a]
--- optionalRestrict xs p =
---    case filter p xs of []  -> [Nothing]
---                        xs' -> map Just xs'
--- @
---
--- For example,
---
--- @
--- > let l = [1, 10, 100, 1000] :: [Field SqlInt4]
--- > 'Opaleye.RunSelect.runSelect' conn (proc () -> optionalRestrict ('Opaleye.Values.valuesSafe' l) -\< (.> 100000)) :: IO [Maybe Int]
--- [Nothing]
---
--- > 'Opaleye.RunSelect.runSelect' conn (proc () -> optionalRestrict ('Opaleye.Values.valuesSafe' l) -\< (.> 15)) :: IO [Maybe Int]
--- [Just 100,Just 1000]
--- @
---
--- See the documentation of 'leftJoin' for how to use
--- 'optionalRestrict' to replace 'leftJoin' (and by symmetry,
--- 'rightJoin').
-optionalRestrict :: D.Default U.Unpackspec a a
-                 => S.Select a
-                 -- ^ Input query
-                 -> S.SelectArr (a -> F.Field T.SqlBool) (M.MaybeFields a)
-                 -- ^ If any rows of the input query satisfy the
-                 -- condition then return them (wrapped in \"Just\").
-                 -- If none of them satisfy the condition then return a
-                 -- single row of \"Nothing\"
-optionalRestrict = J.optionalRestrict
+-- - Full outer joins: use 'Opaleye.FunctionalJoin.fullJoinF'
 
 -- | NB Opaleye exports @Opaleye.Table.'Opaleye.Table.optional'@ from
 -- the top level.  If you want this @optional@ you will have to import
@@ -97,11 +65,11 @@ optionalRestrict = J.optionalRestrict
 --
 -- @
 -- > let l1 = ["one", "two", "three"] :: [Field SqlText]
--- > 'Opaleye.RunSelect.runSelect' conn ('optional' ('Opaleye.Values.valuesSafe' l1)) :: IO [Maybe String]
+-- > 'Opaleye.RunSelect.runSelectI' conn ('optional' ('Opaleye.Values.values' l1))
 -- [Just "one", Just "two", Just "three"]
 --
 -- > let l2 = [] :: [Field SqlText]
--- > 'Opaleye.RunSelect.runSelect' conn ('optional' ('Opaleye.Values.valuesSafe' l2)) :: IO [Maybe String]
+-- > 'Opaleye.RunSelect.runSelectI' conn ('optional' ('Opaleye.Values.values' l2))
 -- [Nothing]
 -- @
 --
@@ -124,6 +92,41 @@ optional :: D.Default U.Unpackspec a a
          -- the input query has no rows in which case a single row of
          -- \"Nothing\"
 optional = M.optional
+
+-- | Convenient access to left/right join functionality.  Performs a
+-- @LEFT JOIN@ under the hood and has behaviour equivalent to the
+-- following Haskell function:
+--
+-- @
+-- optionalRestrict :: [a] -> (a -> Bool) -> [Maybe a]
+-- optionalRestrict xs p =
+--    case filter p xs of []  -> [Nothing]
+--                        xs' -> map Just xs'
+-- @
+--
+-- For example,
+--
+-- @
+-- > let l = [1, 10, 100, 1000] :: [Field SqlInt4]
+-- > 'Opaleye.RunSelect.runSelectI' conn (proc () -> optionalRestrict ('Opaleye.Values.values' l) -\< (.> 100000))
+-- [Nothing]
+--
+-- > 'Opaleye.RunSelect.runSelectI' conn (proc () -> optionalRestrict ('Opaleye.Values.values' l) -\< (.> 15))
+-- [Just 100,Just 1000]
+-- @
+--
+-- See the documentation of 'leftJoin' for how to use
+-- 'optionalRestrict' to replace 'leftJoin' (and by symmetry,
+-- 'rightJoin').
+optionalRestrict :: D.Default U.Unpackspec a a
+                 => S.Select a
+                 -- ^ Input query
+                 -> S.SelectArr (a -> F.Field T.SqlBool) (M.MaybeFields a)
+                 -- ^ If any rows of the input query satisfy the
+                 -- condition then return them (wrapped in \"Just\").
+                 -- If none of them satisfy the condition then return a
+                 -- single row of \"Nothing\"
+optionalRestrict = J.optionalRestrict
 
 -- * Direct access to joins (not recommended)
 

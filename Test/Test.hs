@@ -20,8 +20,10 @@ import qualified Data.Profunctor                  as P
 import qualified Data.Profunctor.Product          as PP
 import qualified Data.Profunctor.Product.Default  as D
 import qualified Data.String                      as String
+import qualified Data.ByteString                  as SBS
 import qualified Data.Text                        as T
-import qualified Data.Time                        as Time
+import qualified Data.Time.Compat                 as Time
+import qualified Data.Time.Clock.POSIX.Compat     as Time
 import qualified Database.PostgreSQL.Simple       as PGS
 import qualified Database.PostgreSQL.Simple.Range as R
 import           GHC.Int                          (Int64)
@@ -91,7 +93,7 @@ required = O.requiredTableField
 twoIntTable :: String
             -> O.Table (Field O.SqlInt4, Field O.SqlInt4)
                        (Field O.SqlInt4, Field O.SqlInt4)
-twoIntTable n = O.Table n (PP.p2 (required "column1", required "column2"))
+twoIntTable n = O.table n (PP.p2 (required "column1", required "column2"))
 
 table1 :: O.Table (Field O.SqlInt4, Field O.SqlInt4)
                   (Field O.SqlInt4, Field O.SqlInt4)
@@ -117,29 +119,29 @@ table4 = twoIntTable "table4"
 
 table5 :: O.Table (Maybe (Field O.SqlInt4), Maybe (Field  O.SqlInt4))
                   (Field O.SqlInt4, Field O.SqlInt4)
-table5 = O.TableWithSchema "public" "table5"
+table5 = O.tableWithSchema "public" "table5"
   (PP.p2 (O.optionalTableField "column1", O.optionalTableField "column2"))
 
 table6 :: O.Table (Field O.SqlText, Field O.SqlText)
                   (Field O.SqlText, Field O.SqlText)
-table6 = O.Table "table6" (PP.p2 (required "column1", required "column2"))
+table6 = O.table "table6" (PP.p2 (required "column1", required "column2"))
 
 table7 :: O.Table (Field O.SqlText, Field O.SqlText)
                   (Field O.SqlText, Field O.SqlText)
-table7 = O.Table "table7" (PP.p2 (required "column1", required "column2"))
+table7 = O.table "table7" (PP.p2 (required "column1", required "column2"))
 
 table8 :: O.Table (Field O.SqlJson) (Field O.SqlJson)
-table8 = O.Table "table8" (required "column1")
+table8 = O.table "table8" (required "column1")
 
 table9 :: O.Table (Field O.SqlJsonb) (Field O.SqlJsonb)
-table9 = O.Table "table9" (required "column1")
+table9 = O.table "table9" (required "column1")
 
 table10 :: O.Table (Field O.SqlInt4) (Field O.SqlInt4)
-table10 = O.Table "table10" (required "column1")
+table10 = O.table "table10" (required "column1")
 
 tableKeywordColNames :: O.Table (Field O.SqlInt4, Field O.SqlInt4)
                                 (Field O.SqlInt4, Field O.SqlInt4)
-tableKeywordColNames = O.Table "keywordtable"
+tableKeywordColNames = O.table "keywordtable"
   (PP.p2 (required "column", required "where"))
 
 table1Q :: Select (Field O.SqlInt4, Field O.SqlInt4)
@@ -431,33 +433,46 @@ testDistinct =
 
 testDistinctOn :: Test
 testDistinctOn = do
-    it "distinct on (col1)" $ \conn -> do
+    let distinctOn p q = \conn -> do
+          let expected = L.nubBy (F.on (==) p) $ L.sortOn p table1data
+          testH q (\r -> L.sort r `shouldBe` L.sort expected) conn
+
+        distinctOnBy proj ord q = \conn -> do
+          let expected = L.nubBy ((==) `F.on` proj) $ L.sortOn (proj &&& ord) triples
+          testH q (\r -> L.sort r `shouldBe` L.sort expected) conn
+
+    it "distinct on ()" $
+        let p = const ()
+            q = O.distinctOnCorrect p table1Q
+        in distinctOn p q
+    it "distinct on (col1)" $
         let p = fst
             q = O.distinctOn p table1Q
-            expected = L.nubBy (F.on (==) p) $ L.sortOn p table1data
-        testH q (\r -> L.sort r `shouldBe` L.sort expected) conn
-    it "distinct on (col1, col2)" $ \conn -> do
+        in distinctOn p q
+    it "distinct on (col1, col2)" $
         let p = fst &&& snd
             q = O.distinctOn p table1Q
-            expected = L.nubBy (F.on (==) p) $ L.sortOn p table1data
-        testH q (\r -> L.sort r `shouldBe` L.sort expected) conn
+        in distinctOn p q
 
     let f1 (x,_,_) = x
         f2 (_,y,_) = y
         f3 (_,_,z) = z
 
-    it "distinct on (col1) order by col2" $ \conn -> do
+    it "distinct on () order by col1" $
+        let proj = const ()
+            ord  = f1
+            q = O.distinctOnByCorrect proj (O.asc ord) $ O.values pgTriples
+        in distinctOnBy proj ord q
+    it "distinct on (col1) order by col2" $
         let proj = f1
             ord  = f2
             q = O.distinctOnBy proj (O.asc ord) $ O.values pgTriples
-            expected = L.nubBy ((==) `F.on` proj) $ L.sortOn (proj &&& ord) triples
-        testH q (\r -> L.sort r `shouldBe` L.sort expected) conn
-    it "distinct on (col1, col2) order by col3" $ \conn -> do
+        in distinctOnBy proj ord q
+    it "distinct on (col1, col2) order by col3" $
         let proj = f1 &&& f2
             ord  = f3
             q = O.distinctOnBy proj (O.asc ord) $ O.values pgTriples
-            expected = L.nubBy ((==) `F.on` proj) $ L.sortOn (proj &&& ord) triples
-        testH q (\r -> L.sort r `shouldBe` L.sort expected) conn
+        in distinctOnBy proj ord q
     it "distinct on (col3) order by col2 desc" $ \conn -> do
         let proj = f3
             ord  = f2
@@ -483,33 +498,22 @@ testDistinctOn = do
             , (4, 100, "b")
             ]
 
--- FIXME: the unsafeCoerceField is currently needed because the type
--- changes required for aggregation are not currently dealt with by
--- Opaleye.
-aggregateCoerceFIXME :: SelectArr (Field O.SqlInt4) (Field O.SqlInt8)
-aggregateCoerceFIXME = Arr.arr aggregateCoerceFIXME'
-
-aggregateCoerceFIXME' :: Field a -> Field O.SqlInt8
-aggregateCoerceFIXME' = O.unsafeCoerceField
-
 testAggregate :: Test
-testAggregate = it "" $ (Arr.second aggregateCoerceFIXME
-                        <<< O.aggregate (PP.p2 (O.groupBy, O.sum))
-                                           table1Q)
+testAggregate = it "" $ O.aggregate (PP.p2 (O.groupBy, O.sumInt4))
+                                           table1Q
                       `selectShouldReturnSorted` [ (1, 400) :: (Int, Int64)
                                                  , (2, 300) ]
 
 testAggregate0 :: Test
-testAggregate0 = it "" $ (Arr.second aggregateCoerceFIXME
-                        <<< O.aggregate (PP.p2 (O.sum, O.sum))
+testAggregate0 = it "" $    O.aggregate (PP.p2 (O.sum, O.sumInt4))
                                         (O.keepWhen (const (O.sqlBool False))
-                                         <<< table1Q))
+                                         <<< table1Q)
                          `selectShouldReturnSorted` ([] :: [(Int, Int64)])
 
 testAggregateFunction :: Test
-testAggregateFunction = it "" $ (Arr.second aggregateCoerceFIXME
-                        <<< O.aggregate (PP.p2 (O.groupBy, O.sum))
-                                        (fmap (\(x, y) -> (x + 1, y)) table1Q))
+testAggregateFunction = it "" $
+                            O.aggregate (PP.p2 (O.groupBy, O.sumInt4))
+                                        (fmap (\(x, y) -> (x + 1, y)) table1Q)
                       `selectShouldReturnSorted` [ (2, 400) :: (Int, Int64)
                                                  , (3, 300) ]
 
@@ -518,14 +522,72 @@ testAggregateProfunctor = it "" $
     q `selectShouldReturnSorted` [ (1, 1200) :: (Int, Int64), (2, 300)]
   where q = O.aggregate (PP.p2 (O.groupBy, countsum)) table1Q
         countsum = P.dimap (\x -> (x,x))
-                           (\(x, y) -> aggregateCoerceFIXME' x * y)
-                           (PP.p2 (O.sum, O.count))
+                           (\(x, y) -> x * y)
+                           (PP.p2 (O.sumInt4, O.count))
 
 testStringArrayAggregate :: Test
 testStringArrayAggregate = it "" $
     q `selectShouldReturnSorted` [(map fst table6data,
                                    minimum (map snd table6data))]
   where q = O.aggregate (PP.p2 (O.arrayAgg, O.min)) table6Q
+
+testValueJsonAggregate :: Test
+testValueJsonAggregate =
+  it "" $
+    testH
+      q
+      ( \((res : _) :: [Json.Value]) ->
+          Just res `shouldBe` r
+      )
+  where
+    r = Json.decode "[{\"summary\": \"xy\", \"details\": \"a\"}, {\"summary\": \"z\", \"details\": \"a\"}, {\"summary\": \"more text\", \"details\": \"a\"}]"
+    q = O.aggregate O.jsonAgg $ do
+      (firstCol, secondCol) <- O.selectTable table6
+      return
+        . O.jsonBuildObject
+        $ O.jsonBuildObjectField "summary" firstCol
+          <> O.jsonBuildObjectField "details" secondCol
+
+testByteStringJsonAggregate :: Test
+testByteStringJsonAggregate =
+  it "" $
+    testH
+      q
+      ( \((res : _) :: [SBS.ByteString]) ->
+          Just res `shouldBe` r
+      )
+  where
+    r :: Maybe SBS.ByteString = Just "[{\"summary\" : \"xy\", \"details\" : \"a\"}, {\"summary\" : \"z\", \"details\" : \"a\"}, {\"summary\" : \"more text\", \"details\" : \"a\"}]"
+    q = O.aggregate O.jsonAgg $ do
+      (firstCol, secondCol) <- O.selectTable table6
+      return
+        . O.jsonBuildObject
+        $ O.jsonBuildObjectField "summary" firstCol
+          <> O.jsonBuildObjectField "details" secondCol
+
+testStringJsonAggregateWithJoin :: Test
+testStringJsonAggregateWithJoin =
+  it "" $
+    testH
+      q
+      ( \((res : _) :: [Json.Value]) ->
+          Just res `shouldBe` r
+      )
+  where
+    r = Json.decode "[{\"id\" : 1, \"name\" : 100, \"blog_post\" : {\"summary\" : 1, \"details\" : 100}}, {\"id\" : 1, \"name\" : 100, \"blog_post\" : {\"summary\" : 1, \"details\" : 100}}, {\"id\" : 1, \"name\" : 200, \"blog_post\" : {\"summary\" : 1, \"details\" : 100}}]"
+    q = O.aggregate O.jsonAgg $ do
+      (firstCol, secondCol) <- O.selectTable table1
+      (firstCol2, secondCol2) <- O.selectTable table2
+      O.viaLateral O.restrict (firstCol .== firstCol2)
+      let blog_post =
+            O.jsonBuildObject $
+              O.jsonBuildObjectField "summary" firstCol2
+                <> O.jsonBuildObjectField "details" secondCol2
+      return
+        . O.jsonBuildObject
+        $ O.jsonBuildObjectField "id" firstCol
+          <> O.jsonBuildObjectField "name" secondCol
+          <> O.jsonBuildObjectField "blog_post" blog_post
 
 testStringAggregate :: Test
 testStringAggregate = it "" $ q `selectShouldReturnSorted` expected
@@ -638,8 +700,7 @@ testOffsetLimit = it "" $ limitOrderShouldMatch (O.offset 2 . O.limit 2) (drop 2
 testDistinctAndAggregate :: Test
 testDistinctAndAggregate = it "" $ q `selectShouldReturnSorted` expectedResult
   where q = O.distinct table1Q
-            &&& (Arr.second aggregateCoerceFIXME
-                 <<< O.aggregate (PP.p2 (O.groupBy, O.sum)) table1Q)
+            &&& O.aggregate (PP.p2 (O.groupBy, O.sumInt4)) table1Q
         expectedResult = A.liftA2 (,) (L.nub table1data)
                                       [(1 :: Int, 400 :: Int64), (2, 300)]
 
@@ -959,6 +1020,30 @@ testArrayAppend = it "appends two arrays" $
                   `O.arrayAppend` O.sqlArray O.sqlInt4 [1,2,3])
         (`shouldBe` ([[5,6,7,1,2,3]] :: [[Int]]))
 
+testArrayPosition :: Test
+testArrayPosition = do
+  it "determines array position (SqlInt4)" $
+    testH (A.pure (O.arrayPosition (O.sqlArray O.sqlInt4 [5,6,7]) 5))
+          (`shouldBe` [Just (1 :: Int)])
+  it "determines array position (NULL) (SqlInt4)" $
+    testH (A.pure (O.arrayPosition (O.sqlArray O.sqlInt4 [5,6,7]) 999))
+          (`shouldBe` [Nothing :: Maybe Int])
+  it "determines array position (SqlInt8)" $
+    testH (A.pure (O.arrayPosition (O.sqlArray O.sqlInt8 [5,6,7]) 5))
+          (`shouldBe` [Just (1 :: Int)])
+  it "determines array position (NULL) (SqlInt8)" $
+    testH (A.pure (O.arrayPosition (O.sqlArray O.sqlInt8 [5,6,7]) 999))
+          (`shouldBe` [Nothing :: Maybe Int])
+
+testSqlElem :: Test
+testSqlElem = do
+  it "checks presence of the element (SqlInt4)" $
+    testH (A.pure (O.sqlElem 5 (O.sqlArray O.sqlInt4 [5,6,7])))
+          (`shouldBe` [True])
+  it "checks absence of the element (SqlInt4)" $
+    testH (A.pure (O.sqlElem 999 (O.sqlArray O.sqlInt4 [5,6,7])))
+          (`shouldBe` [False])
+
 type JsonTest a = SpecWith (Select (Field a) -> PGS.Connection -> Expectation)
 -- Test opaleye's equivalent of c1->'c'
 testJsonGetFieldValue :: (O.SqlIsJson a, DefaultFromField a Json.Value)
@@ -1153,6 +1238,11 @@ jsonTests t = do
 testLiterals :: Test
 testLiterals = do
   let testLiteral fn value = testH (pure (fn value)) (`shouldBe` [value])
+      exampleDate = Time.fromGregorian 2018 11 29
+      exampleTime = Time.TimeOfDay 11 22 33
+      exampleUTCTime = Time.UTCTime exampleDate (Time.sinceMidnight exampleTime)
+      exampleDatePadded = Time.fromGregorian 18 11 29
+      exampleUTCTimePadded = Time.UTCTime exampleDatePadded (Time.sinceMidnight exampleTime)
   it "sqlString" $ testLiteral O.sqlString "Hello"
   it "sqlLazyByteString" $ testLiteral O.sqlLazyByteString "Hello"
   it "sqlNumeric" $ testLiteral O.sqlNumeric 3.14159
@@ -1161,23 +1251,25 @@ testLiterals = do
   it "sqlDouble" $ testLiteral O.sqlDouble 3.14
   it "sqlBool" $ testLiteral O.sqlBool True
   it "sqlUUID" $ testLiteral O.sqlUUID (read "c2cc10e1-57d6-4b6f-9899-38d972112d8c")
-  it "sqlDay" $ testLiteral O.sqlDay (read "2018-11-29")
-  it "sqlDayPadded" $ testLiteral O.sqlDay (read "20-11-21")
-  it "sqlUTCTime" $ testLiteral O.sqlUTCTime (read "2018-11-29 11:22:33 UTC")
-  it "sqlUTCTimePadded" $ testLiteral O.sqlUTCTime (read "20-11-21 11:22:33 UTC")
-  it "sqlLocalTime" $ testLiteral O.sqlLocalTime (read "2018-11-29 11:22:33")
-  it "sqlLocalTimePadded" $ testLiteral O.sqlLocalTime (read "20-11-21 11:22:33")
+  it "sqlDay" $ testLiteral O.sqlDay exampleDate
+  it "sqlDayPadded" $ testLiteral O.sqlDay exampleDatePadded
+  it "sqlUTCTime" $ testLiteral O.sqlUTCTime exampleUTCTime
+  it "sqlUTCTimePadded" $ testLiteral O.sqlUTCTime exampleUTCTimePadded
+  it "sqlLocalTime" $ testLiteral O.sqlLocalTime (Time.LocalTime exampleDate exampleTime)
+  it "sqlLocalTimePadded" $ testLiteral O.sqlLocalTime (Time.LocalTime exampleDatePadded exampleTime)
 
   -- ZonedTime has no Eq instance, so we compare on the result of 'zonedTimeToUTC'
   it "sqlZonedTime" $
-    let value = read "2018-11-29 11:22:33 UTC" :: Time.ZonedTime in
+    let value = Time.utcToZonedTime Time.utc exampleUTCTime in
     testH (pure (O.sqlZonedTime value))
           (\r -> map Time.zonedTimeToUTC r `shouldBe` [Time.zonedTimeToUTC value])
 
   it "sqlZonedTimePadded" $
-    let value = read "20-11-21 11:22:33 UTC" :: Time.ZonedTime in
+    let value = Time.utcToZonedTime Time.utc exampleUTCTimePadded in
     testH (pure (O.sqlZonedTime value))
           (\r -> map Time.zonedTimeToUTC r `shouldBe` [Time.zonedTimeToUTC value])
+
+  it "sqlInterval" $ testLiteral O.sqlInterval (Time.calendarTimeTime 1)
 
 -- Check that MaybeFields's "Nothings" are not distinct, even if we
 -- fmap different values over their inner fields.
@@ -1198,6 +1290,107 @@ testForUpdate = do
   it "Returns same rows from a table" $
       testH (OL.forUpdate table1Q) (`shouldBe` table1data)
 
+testAddIntervalFromDateToTimestamptz :: Test
+testAddIntervalFromDateToTimestamptz = do
+  it "date + interval = timestamptz" $ testH query (`shouldBe` [expectation])
+  where query :: Select (Field O.SqlTimestamp)
+        query = pure $ (O.toFields d :: Field O.SqlDate)
+                       `O.addInterval`
+                       (O.toFields c :: Field O.SqlInterval)
+
+        d :: Time.Day
+        d = Time.ModifiedJulianDay 0 -- = 1858-11-17
+
+        -- 1 second
+        c :: Time.CalendarDiffTime
+        c = Time.calendarTimeTime 1
+
+        expectation :: Time.LocalTime
+        expectation = Time.ctTime c `Time.addLocalTime`
+                        Time.LocalTime
+                        { Time.localDay = d
+                        , Time.localTimeOfDay = Time.TimeOfDay 0 0 0
+                        }
+
+testAddIntervalFromIntervalToInterval :: Test
+testAddIntervalFromIntervalToInterval = do
+  it "interval + interval = interval" $ testH query (`shouldBe` [expectation])
+  where query :: Select (Field O.SqlInterval)
+        query = pure $ (O.toFields c1 :: Field O.SqlInterval)
+                       `O.addInterval`
+                       (O.toFields c2 :: Field O.SqlInterval)
+
+        -- 1 second
+        c1 :: Time.CalendarDiffTime
+        c1 = Time.calendarTimeTime 1
+
+        -- 2 second
+        c2 :: Time.CalendarDiffTime
+        c2 = Time.calendarTimeTime 2
+
+        expectation :: Time.CalendarDiffTime
+        expectation = Time.calendarTimeTime $ Time.ctTime c1 + Time.ctTime c2
+
+testAddIntervalFromTimestampToTimestamp :: Test
+testAddIntervalFromTimestampToTimestamp = do
+  it "timestamp + interval = timestamp" $ testH query (`shouldBe` [expectation])
+  where query :: Select (Field O.SqlTimestamp)
+        query = pure $ (O.toFields t :: Field O.SqlTimestamp)
+                       `O.addInterval`
+                       (O.toFields c :: Field O.SqlInterval)
+
+        t :: Time.LocalTime
+        t = Time.LocalTime
+            { Time.localDay = Time.ModifiedJulianDay 0 -- = 1858-11-17
+            , Time.localTimeOfDay = Time.TimeOfDay 0 0 0 -- midnight
+            }
+
+        -- 1 second
+        c :: Time.CalendarDiffTime
+        c = Time.calendarTimeTime 1
+
+        expectation :: Time.LocalTime
+        expectation = Time.ctTime c `Time.addLocalTime` t
+
+testAddIntervalFromTimestamptzToTimestamptz :: Test
+testAddIntervalFromTimestamptzToTimestamptz = do
+  it "timestamptz + interval = timestamptz" $ testH query (`shouldBe` [expectation])
+  where query :: Select (Field O.SqlTimestamptz)
+        query = pure $ (O.toFields t :: Field O.SqlTimestamptz)
+                       `O.addInterval`
+                       (O.toFields c :: Field O.SqlInterval)
+
+        -- UNIX epoch
+        t :: Time.UTCTime
+        t = Time.posixSecondsToUTCTime 0
+
+        -- 1 second
+        c :: Time.CalendarDiffTime
+        c = Time.calendarTimeTime 1
+
+        expectation :: Time.UTCTime
+        expectation = Time.ctTime c `Time.addUTCTime` t
+
+testAddIntervalFromTimeToTime :: Test
+testAddIntervalFromTimeToTime = do
+  it "time + interval = time" $ testH query (`shouldBe` [expectation])
+  where query :: Select (Field O.SqlTime)
+        query = pure $ (O.toFields t :: Field O.SqlTime)
+                       `O.addInterval`
+                       (O.toFields c :: Field O.SqlInterval)
+
+        -- midnight
+        t :: Time.TimeOfDay
+        t = Time.TimeOfDay 0 0 0
+
+        -- 1 second
+        c :: Time.CalendarDiffTime
+        c = Time.calendarTimeTime 1
+
+        expectation :: Time.TimeOfDay
+        expectation = Time.timeToTimeOfDay $
+                        (realToFrac (Time.ctTime c :: Time.NominalDiffTime) :: Time.DiffTime)
+                          + Time.timeOfDayToTime t
 
 testShowSqlAnonymized :: Test
 testShowSqlAnonymized = do
@@ -1270,6 +1463,9 @@ main = do
   Connection.close conn2
 
   conn3 <- PGS.connectPostgreSQL connectString
+  -- intervals can only be decoded to CalendarDiffTimes
+  -- when the interval rendering style is set to ISO-8601.
+  _nrOfAffectedRows <- PGS.execute_ conn3 "SET intervalstyle TO iso_8601;"
   hspec $ do
     before (return conn3) $ do
       describe "core dsl?" $ do
@@ -1290,6 +1486,9 @@ main = do
         testAggregateFunction
         testAggregateProfunctor
         testStringArrayAggregate
+        testValueJsonAggregate
+        testByteStringJsonAggregate
+        testStringJsonAggregateWithJoin
         testStringAggregate
         testOverwriteAggregateOrdered
         testMultipleAggregateOrdered
@@ -1326,6 +1525,8 @@ main = do
         testArrayIndexOOB
         testSingletonArray
         testArrayAppend
+        testArrayPosition
+        testSqlElem
       describe "joins" $ do
         testLeftJoin
         testLeftJoinNullable
@@ -1370,5 +1571,11 @@ main = do
         testMaybeFieldsDistinct
       describe "Locking" $ do
         testForUpdate
+      describe "Interval" $ do
+        testAddIntervalFromDateToTimestamptz
+        testAddIntervalFromIntervalToInterval
+        testAddIntervalFromTimestampToTimestamp
+        testAddIntervalFromTimestamptzToTimestamptz
+        testAddIntervalFromTimeToTime
       describe "showSqlAnonymized" $ do
         testShowSqlAnonymized

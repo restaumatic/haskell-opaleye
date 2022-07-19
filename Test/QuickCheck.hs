@@ -17,6 +17,7 @@ import           Opaleye.Test.TraverseA (traverseA1)
 
 import qualified Opaleye as O
 import qualified Opaleye.Join as OJ
+import qualified Opaleye.Exists as OE
 
 import qualified Database.PostgreSQL.Simple as PGS
 import           Control.Applicative (Applicative, pure, (<$>), (<*>))
@@ -401,14 +402,14 @@ limit :: ArbitraryPositiveInt
       -> Connection
       -> IO TQ.Property
 limit (ArbitraryPositiveInt l) (ArbitrarySelect q) o = do
-  let q' = O.limit l (O.orderBy (arbitraryOrder o) q)
+  let limited = O.limit l (O.orderBy (arbitraryOrder o) q)
 
-  unSelectDenotations (denotation q') (denotation q) $ \one' two' -> do
-      let remainder = MultiSet.fromList two'
+  unSelectDenotations (denotation limited) (denotation q) $ \limited' unlimited' -> do
+      let remainder = MultiSet.fromList unlimited'
                       `MultiSet.difference`
-                      MultiSet.fromList one'
+                      MultiSet.fromList limited'
           maxChosen :: Maybe Haskells
-          maxChosen = maximumBy (arbitraryOrdering o) one'
+          maxChosen = maximumBy (arbitraryOrdering o) limited'
           minRemain :: Maybe Haskells
           minRemain = minimumBy (arbitraryOrdering o) (MultiSet.toList remainder)
           cond :: Maybe Bool
@@ -416,7 +417,7 @@ limit (ArbitraryPositiveInt l) (ArbitrarySelect q) o = do
           condBool :: Bool
           condBool = Maybe.fromMaybe True cond
 
-      return ((length one' === min l (length two'))
+      return ((length limited' === min l (length unlimited'))
               .&&. condBool)
 
 offset :: ArbitraryPositiveInt -> ArbitrarySelect -> Connection
@@ -499,6 +500,14 @@ lateral (ArbitraryKleisli f) =
   compareDenotation (O.lateral f) (lateralDenotation (denotation . f'))
   where f' = f . fieldsOfHaskells
 
+exists :: ArbitrarySelect -> Connection -> IO TQ.Property
+exists = compareDenotationNoSort' (existsQ OE.exists) (existsQ existsList)
+  where existsList l = [not (null l)]
+        existsQ existsf q = do
+          exists_ <- existsf q
+          pure (Choices [Left (CBool exists_)])
+
+
 {- TODO
 
   * Nullability
@@ -572,6 +581,7 @@ run conn = do
   test1 maybeFieldsToSelect
   test2 traverseMaybeFields
   test2 lateral
+  test1 exists
 
 -- }
 
@@ -580,13 +590,10 @@ run conn = do
 nub :: Ord a => [a] -> [a]
 nub = Set.toList . Set.fromList
 
--- Replace this with `isSuccess` when the following issue is fixed
---
---     https://github.com/nick8325/quickcheck/issues/220
 errorIfNotSuccess :: TQ.Result -> IO ()
-errorIfNotSuccess r = case r of
-  TQ.Success {} -> return ()
-  _             -> error "Failed"
+errorIfNotSuccess r = if TQ.isSuccess r
+                      then return ()
+                      else error "Failed"
 
 restrictFirstBoolDenotation :: SelectArrDenotation Haskells Haskells
 restrictFirstBoolDenotation = proc hs -> do

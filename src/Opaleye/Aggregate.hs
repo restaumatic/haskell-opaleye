@@ -25,6 +25,7 @@ module Opaleye.Aggregate
        , boolOr
        , boolAnd
        , arrayAgg
+       , jsonAgg
        , stringAgg
        -- * Counting rows
        , countRows
@@ -75,6 +76,8 @@ query has zero rows it has zero groups, and thus zero rows in the
 result of an aggregation.
 
 -}
+-- See 'Opaleye.Internal.Sql.aggregate' for details of how aggregating
+-- by an empty query with no group by is handled.
 aggregate :: Aggregator a b -> S.Select a -> S.Select b
 aggregate agg q = Q.productQueryArr (A.aggregateU agg . Q.runSimpleQueryArr q)
 
@@ -142,6 +145,29 @@ boolAnd = A.makeAggr HPQ.AggrBoolAnd
 
 arrayAgg :: Aggregator (C.Column a) (C.Column (T.SqlArray a))
 arrayAgg = A.makeAggr HPQ.AggrArr
+
+{-|
+Aggregates values, including nulls, as a JSON array
+
+An example usage:
+
+@
+import qualified Opaleye as O
+
+O.aggregate O.jsonAgg $ do
+    (firstCol, secondCol) <- O.selectTable table6
+    return
+      . O.jsonBuildObject
+      $ O.jsonBuildObjectField "summary" firstCol
+        <> O.jsonBuildObjectField "details" secondCol
+@
+
+The above query, when executed, will return JSON of the following form from postgres:
+
+@"[{\\"summary\\" : \\"xy\\", \\"details\\" : \\"a\\"}, {\\"summary\\" : \\"z\\", \\"details\\" : \\"a\\"}, {\\"summary\\" : \\"more text\\", \\"details\\" : \\"a\\"}]"@
+-}
+jsonAgg :: Aggregator (C.Column a) (C.Column T.SqlJson)
+jsonAgg = A.makeAggr HPQ.JsonArr
 
 stringAgg :: C.Column T.SqlText
           -> Aggregator (C.Column T.SqlText) (C.Column T.SqlText)

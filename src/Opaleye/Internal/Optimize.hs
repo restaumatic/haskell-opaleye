@@ -10,7 +10,7 @@ import           Opaleye.Internal.Helpers   ((.:))
 import qualified Data.List.NonEmpty as NEL
 import           Data.Semigroup ((<>))
 
-import           Control.Applicative ((<$>), (<*>), pure)
+import           Control.Applicative ((<$>), (<*>), liftA2, pure)
 import           Control.Arrow (first)
 
 optimize :: PQ.PrimQuery' a -> PQ.PrimQuery' a
@@ -47,8 +47,9 @@ removeEmpty = PQ.foldPrimQuery PQ.PrimQueryFold {
   , PQ.aggregate = fmap . PQ.Aggregate
   , PQ.distinctOnOrderBy = \mDistinctOns -> fmap . PQ.DistinctOnOrderBy mDistinctOns
   , PQ.limit     = fmap . PQ.Limit
-  , PQ.join      = \jt pe pes1 pes2 pq1 pq2 -> PQ.Join jt pe pes1 pes2 <$> pq1 <*> pq2
-  , PQ.existsf   = \b pq1 pq2 -> PQ.Exists b <$> pq1 <*> pq2
+  , PQ.join      = \jt pe pq1 pq2 -> PQ.Join jt pe <$> sequence pq1 <*> sequence pq2
+  , PQ.semijoin  = liftA2 . PQ.Semijoin
+  , PQ.exists    = fmap . PQ.Exists
   , PQ.values    = return .: PQ.Values
   , PQ.binary    = \case
       -- Some unfortunate duplication here

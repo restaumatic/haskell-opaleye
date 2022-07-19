@@ -1,6 +1,6 @@
 name:            opaleye
-copyright:       Copyright (c) 2014-2018 Purely Agile Limited; 2019-2020 Tom Ellis
-version:         0.7.1.0
+copyright:       Copyright (c) 2014-2018 Purely Agile Limited; 2019-2022 Tom Ellis
+version:         0.7.6.2
 synopsis:        An SQL-generating DSL targeting PostgreSQL
 description:     An SQL-generating DSL targeting PostgreSQL.  Allows
                  Postgres queries to be written within Haskell in a
@@ -13,11 +13,11 @@ author:          Purely Agile
 maintainer:      Purely Agile
 category:        Database
 build-type:      Simple
-cabal-version:   >= 1.18
+cabal-version:   1.18
 extra-doc-files: README.md
                  CHANGELOG.md
                  *.md
-tested-with:     GHC==8.10.1, GHC==8.8.3, GHC==8.6.5, GHC==8.4.4, GHC==8.2.2, GHC==8.0.2
+tested-with:     GHC==9.0, GHC==8.10, GHC==8.8, GHC==8.6, GHC==8.4, GHC==8.2, GHC==8.0
 
 source-repository head
   type:     git
@@ -33,7 +33,7 @@ library
     , case-insensitive    >= 1.2     && < 1.3
     , bytestring          >= 0.10    && < 0.11
     , contravariant       >= 1.2     && < 1.6
-    , postgresql-simple   >= 0.5.3   && < 0.7
+    , postgresql-simple   >= 0.6     && < 0.7
     , pretty              >= 1.1.1.0 && < 1.2
     , product-profunctors >= 0.8.0.0 && < 0.12
     , profunctors         >= 4.0     && < 5.7
@@ -41,7 +41,7 @@ library
     , semigroups          >= 0.13    && < 0.20
     , text                >= 0.11    && < 1.3
     , transformers        >= 0.3     && < 0.6
-    , time                >= 1.4     && < 1.10
+    , time-compat         >= 1.9.5   && < 1.12
     , time-locale-compat  >= 0.1     && < 0.2
     , uuid                >= 1.3     && < 1.4
     , void                >= 0.4     && < 0.8
@@ -53,6 +53,7 @@ library
                    Opaleye.Constant,
                    Opaleye.Distinct,
                    Opaleye.Experimental.Enum,
+                   Opaleye.Exists,
                    Opaleye.Field,
                    Opaleye.FunctionalJoin,
                    Opaleye.Join,
@@ -83,7 +84,7 @@ library
                    Opaleye.Internal.Helpers,
                    Opaleye.Internal.Inferrable,
                    Opaleye.Internal.Join,
-                   Opaleye.Internal.Label,
+                   Opaleye.Internal.JSONBuildObjectFields,
                    Opaleye.Internal.Lateral,
                    Opaleye.Internal.Map,
                    Opaleye.Internal.Manipulation,
@@ -97,6 +98,7 @@ library
                    Opaleye.Internal.PrimQuery,
                    Opaleye.Internal.Print,
                    Opaleye.Internal.QueryArr,
+                   Opaleye.Internal.Rebind,
                    Opaleye.Internal.RunQuery,
                    Opaleye.Internal.RunQueryExternal,
                    Opaleye.Internal.Sql,
@@ -139,7 +141,7 @@ test-suite test
     QuickCheck,
     semigroups,
     text >= 0.11 && < 1.3,
-    time,
+    time-compat,
     uuid,
     transformers,
     hspec,
@@ -155,7 +157,6 @@ test-suite tutorial
                  TutorialBasic,
                  TutorialManipulation,
                  TutorialBasicMonomorphic,
-                 TutorialBasicTypeFamilies,
                  DefaultExplanation
   hs-source-dirs: Doc/Tutorial
   build-depends:
