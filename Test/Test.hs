@@ -27,9 +27,10 @@ import qualified Data.Time.Clock.POSIX.Compat     as Time
 import qualified Database.PostgreSQL.Simple       as PGS
 import qualified Database.PostgreSQL.Simple.Range as R
 import           GHC.Int                          (Int64)
-import           Opaleye                          (Field, Nullable, Select,
+import           Opaleye                          (Field, FieldNullable, Select,
                                                    SelectArr, (.==), (.>))
 import qualified Opaleye                          as O
+import qualified Opaleye.Field                    as  F
 import qualified Opaleye.Internal.Aggregate       as IA
 import           Opaleye.Internal.Locking         as OL
 import           Opaleye.Internal.MaybeFields     as OM
@@ -87,7 +88,7 @@ possible to simplify the property tests though.
 
 -}
 
-required :: String -> O.TableFields (O.Column a) (O.Column a)
+required :: String -> O.TableFields (O.Field a) (O.Field a)
 required = O.requiredTableField
 
 twoIntTable :: String
@@ -353,8 +354,8 @@ testRestrict = it "restricts the rows returned" $
           O.restrict -< fst t .== 1
           Arr.returnA -< t
 
-testExists :: Test
-testExists = it "restricts the rows returned with EXISTS" $
+testRestrictExists :: Test
+testRestrictExists = it "restricts the rows returned with EXISTS" $
     select `selectShouldReturnSorted` filter ((== 1) . fst) (L.sort table1data)
   where select = proc () -> do
           t <- table1Q -< ()
@@ -363,8 +364,8 @@ testExists = it "restricts the rows returned with EXISTS" $
                             O.restrict -< fst t' .> fst t) -< t
           Arr.returnA -< t
 
-testNotExists :: Test
-testNotExists = it "restricts the rows returned with NOT EXISTS" $
+testRestrictNotExists :: Test
+testRestrictNotExists = it "restricts the rows returned with NOT EXISTS" $
     select `selectShouldReturnSorted` filter ((== 2) . fst)  (L.sort table1data)
   where select = proc () -> do
           t <- table1Q -< ()
@@ -443,7 +444,7 @@ testDistinctOn = do
 
     it "distinct on ()" $
         let p = const ()
-            q = O.distinctOnCorrect p table1Q
+            q = O.distinctOn p table1Q
         in distinctOn p q
     it "distinct on (col1)" $
         let p = fst
@@ -461,7 +462,7 @@ testDistinctOn = do
     it "distinct on () order by col1" $
         let proj = const ()
             ord  = f1
-            q = O.distinctOnByCorrect proj (O.asc ord) $ O.values pgTriples
+            q = O.distinctOnBy proj (O.asc ord) $ O.values pgTriples
         in distinctOnBy proj ord q
     it "distinct on (col1) order by col2" $
         let proj = f1
@@ -724,7 +725,7 @@ testDoubleAggregate = it "" $ testDoubleH (O.aggregate O.count) [1 :: Int64]
 testDoubleLeftJoin :: Test
 testDoubleLeftJoin = it "" $ testDoubleH lj [(1 :: Int, Just (1 :: Int))]
   where lj :: Select (Field O.SqlInt4)
-          -> Select (Field O.SqlInt4, Field (Nullable O.SqlInt4))
+          -> Select (Field O.SqlInt4, FieldNullable O.SqlInt4)
         lj q = O.leftJoin q q (uncurry (.==))
 
 testDoubleValues :: Test
@@ -737,7 +738,7 @@ testDoubleUnionAll = it "" $ testDoubleH u [1 :: Int, 1]
   where u q = q `O.unionAll` q
 
 aLeftJoin :: Select ((Field O.SqlInt4, Field O.SqlInt4),
-                    (Field (Nullable O.SqlInt4), Field (Nullable O.SqlInt4)))
+                    (FieldNullable O.SqlInt4, FieldNullable O.SqlInt4))
 aLeftJoin = O.leftJoin table1Q table3Q (\(l, r) -> fst l .== fst r)
 
 testLeftJoin :: Test
@@ -751,9 +752,9 @@ testLeftJoin = it "" $ testH aLeftJoin (`shouldBe` expected)
 testLeftJoinNullable :: Test
 testLeftJoinNullable = it "" $ testH q (`shouldBe` expected)
   where q :: Select ((Field O.SqlInt4, Field O.SqlInt4),
-                    ((Field (Nullable O.SqlInt4), Field (Nullable O.SqlInt4)),
-                     (Field (Nullable O.SqlInt4),
-                      Field (Nullable O.SqlInt4))))
+                    ((FieldNullable O.SqlInt4, FieldNullable O.SqlInt4),
+                     (FieldNullable O.SqlInt4,
+                      FieldNullable O.SqlInt4)))
         q = O.leftJoin table3Q aLeftJoin cond
 
         cond (x, y) = fst x .== fst (fst y)
@@ -895,11 +896,11 @@ testInsertConflict = it "inserts with conflicts" $ \conn -> do
   extras <- O.runInsert_ conn O.Insert { O.iTable = table10
                                        , O.iRows = conflictsT
                                        , O.iReturning = O.rReturning id
-                                       , O.iOnConflict = Just O.DoNothing }
+                                       , O.iOnConflict = Just O.doNothing }
   moreExtras <- O.runInsert_ conn O.Insert { O.iTable = table10
                                            , O.iRows = moreConflictsT
                                            , O.iReturning = O.rCount
-                                           , O.iOnConflict = Just O.DoNothing }
+                                           , O.iOnConflict = Just O.doNothing }
 
   returned `shouldBe` afterInsert
   extras `shouldBe` afterConflicts
@@ -1068,9 +1069,12 @@ testRestrictWithJsonOp :: (O.SqlIsJson a) => Select (Field a) -> Test
 testRestrictWithJsonOp dataSelect = it "restricts the rows returned by checking equality with a value extracted using JSON operator" $ testH select (`shouldBe` table8data)
   where select = dataSelect >>> proc col1 -> do
           t <- table8Q -< ()
-          O.restrict -< (O.toNullable col1 O..->> O.sqlStrictText "c")
-                         .== O.toNullable (O.sqlStrictText "21")
+          O.restrict -< nonNullOrFalse (O.toNullable col1 O..->> O.sqlStrictText "c") $ \x1 ->
+                        nonNullOrFalse (O.toNullable (O.sqlStrictText "21")) $ \x2 ->
+                        x1 .== x2
           Arr.returnA -< t
+
+        nonNullOrFalse = flip (F.matchNullable (O.sqlBool False))
 
 -- Test opaleye's equivalent of c1->'a'->2
 testJsonGetArrayValue :: (O.SqlIsJson a, DefaultFromField a Json.Value)
@@ -1428,12 +1432,12 @@ main = do
 
   let mconnectString = connectStringEnvVar <|> connectStringDotEnv
 
-  connectString <- maybe
-    (fail ("Set " ++ envVarName ++ " environment variable\n"
-           ++ "For example " ++ envVarName ++ "='user=tom dbname=opaleye_test "
-           ++ "host=localhost port=25433 password=tom'"))
-    (pure . String.fromString)
-    mconnectString
+  connectString <- case mconnectString of
+    Nothing ->
+      fail ("Set " ++ envVarName ++ " environment variable\n"
+            ++ "For example " ++ envVarName ++ "='user=tom dbname=opaleye_test "
+            ++ "host=localhost port=25433 password=tom'")
+    Just s -> pure (String.fromString s)
 
   conn <- PGS.connectPostgreSQL connectString
 
@@ -1472,8 +1476,8 @@ main = do
         testSelect
         testProduct
         testRestrict
-        testExists
-        testNotExists
+        testRestrictExists
+        testRestrictNotExists
         testIn
         testNum
         testDiv

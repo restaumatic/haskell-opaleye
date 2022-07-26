@@ -5,7 +5,8 @@ module Opaleye.Internal.JSONBuildObjectFields
   )
 where
 
-import Opaleye.Internal.Column (Column (Column))
+import Opaleye.Internal.Column (Field_(Column))
+import Opaleye.Field (Field)
 import Opaleye.Internal.HaskellDB.PrimQuery (Literal (StringLit), PrimExpr (ConstExpr, FunExpr))
 import Opaleye.Internal.PGTypesExternal (SqlJson)
 import Data.Semigroup
@@ -24,10 +25,10 @@ instance Monoid JSONBuildObjectFields where
   mempty = JSONBuildObjectFields mempty
   mappend = (<>)
 
--- | Given a label and a column, generates a pair for use with @jsonBuildObject@
+-- | Given a label and a field, generates a pair for use with @jsonBuildObject@
 jsonBuildObjectField :: String
                      -- ^ Field name
-                     -> Column a
+                     -> Field_ n a
                      -- ^ Field value
                      -> JSONBuildObjectFields
 jsonBuildObjectField f (Column v) = JSONBuildObjectFields [(f, v)]
@@ -35,7 +36,7 @@ jsonBuildObjectField f (Column v) = JSONBuildObjectFields [(f, v)]
 -- | Create an 'SqlJson' object from a collection of fields.
 --
 --   Note: This is implemented as a variadic function in postgres, and as such, is limited to 50 arguments, or 25 key-value pairs.
-jsonBuildObject :: JSONBuildObjectFields -> Column SqlJson
+jsonBuildObject :: JSONBuildObjectFields -> Field SqlJson
 jsonBuildObject (JSONBuildObjectFields jbofs) = Column $ FunExpr "json_build_object" args
   where
     args = concatMap mapLabelsToPrimExpr jbofs

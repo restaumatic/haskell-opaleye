@@ -16,20 +16,22 @@ module Opaleye.Order ( -- * Order by
                      , limit
                      , offset
                      -- * Distinct on
-                     , distinctOnCorrect
-                     , distinctOnByCorrect
+                     , distinctOn
+                     , distinctOnBy
                      -- * Exact ordering
                      , O.exact
                      -- * Other
-                     , PGOrd
                      , SqlOrd
+                     -- * Explicit versions
+                     , distinctOnExplicit
+                     , distinctOnByExplicit
                      -- * Deprecated
-                     , distinctOn
-                     , distinctOnBy
+                     , distinctOnCorrect
+                     , distinctOnByCorrect
                      ) where
 
 import qualified Data.Profunctor.Product.Default as D
-import qualified Opaleye.Column as C
+import qualified Opaleye.Field as F
 import qualified Opaleye.Internal.HaskellDB.PrimQuery as HPQ
 import qualified Opaleye.Internal.Order as O
 import qualified Opaleye.Internal.QueryArr as Q
@@ -55,30 +57,32 @@ example = 'orderBy' ('asc' fst \<\> 'desc' snd)
 -}
 orderBy :: O.Order a -> S.Select a -> S.Select a
 orderBy os q =
-  Q.productQueryArr (O.orderByU os . Q.runSimpleQueryArr q)
+  Q.productQueryArr' $ \() -> do
+    a_pq <- Q.runSimpleQueryArr' q ()
+    pure (O.orderByU os a_pq)
 
 -- | Specify an ascending ordering by the given expression.
 --   (Any NULLs appear last)
-asc :: SqlOrd b => (a -> C.Column b) -> O.Order a
+asc :: SqlOrd b => (a -> F.Field b) -> O.Order a
 asc = O.order HPQ.OrderOp { HPQ.orderDirection = HPQ.OpAsc
                           , HPQ.orderNulls     = HPQ.NullsLast }
 
 -- | Specify an descending ordering by the given expression.
 --   (Any NULLs appear first)
-desc :: SqlOrd b => (a -> C.Column b) -> O.Order a
+desc :: SqlOrd b => (a -> F.Field b) -> O.Order a
 desc = O.order HPQ.OrderOp { HPQ.orderDirection = HPQ.OpDesc
                            , HPQ.orderNulls     = HPQ.NullsFirst }
 
 -- | Specify an ascending ordering by the given expression.
 --   (Any NULLs appear first)
-ascNullsFirst :: SqlOrd b => (a -> C.Column b) -> O.Order a
+ascNullsFirst :: SqlOrd b => (a -> F.Field b) -> O.Order a
 ascNullsFirst = O.order HPQ.OrderOp { HPQ.orderDirection = HPQ.OpAsc
                                     , HPQ.orderNulls     = HPQ.NullsFirst }
 
 
 -- | Specify an descending ordering by the given expression.
 --   (Any NULLs appear last)
-descNullsLast :: SqlOrd b => (a -> C.Column b) -> O.Order a
+descNullsLast :: SqlOrd b => (a -> F.Field b) -> O.Order a
 descNullsLast = O.order HPQ.OrderOp { HPQ.orderDirection = HPQ.OpDesc
                                     , HPQ.orderNulls     = HPQ.NullsLast }
 
@@ -112,7 +116,9 @@ SELECT * FROM (SELECT * FROM yourTable LIMIT 10) OFFSET 50
 @
 -}
 limit :: Int -> S.Select a -> S.Select a
-limit n a = Q.productQueryArr (O.limit' n . Q.runSimpleQueryArr a)
+limit n a = Q.productQueryArr' $ \() -> do
+  a_pq <- Q.runSimpleQueryArr' a ()
+  pure (O.limit' n a_pq)
 
 {- |
 Offset the results of the given 'S.Select' by the given amount, skipping
@@ -122,40 +128,32 @@ that many result rows.
 'offset' with 'limit'.
 -}
 offset :: Int -> S.Select a -> S.Select a
-offset n a = Q.productQueryArr (O.offset' n . Q.runSimpleQueryArr a)
+offset n a = Q.productQueryArr' $ \() -> do
+  a_pq <- Q.runSimpleQueryArr' a ()
+  pure (O.offset' n a_pq)
 
 -- * Distinct on
 
--- | Keep a row from each set where the given function returns the same result. No
---   ordering is guaranteed. Multiple fields may be distinguished by projecting out
---   tuples of 'Opaleye.Field.Field_'s. Use 'distinctOnBy' to control how the rows
---   are chosen.
+-- | Use 'distinctOn' instead.  Will be deprecated in 0.10.
 distinctOnCorrect :: D.Default U.Unpackspec b b
                   => (a -> b)
                   -> S.Select a
                   -> S.Select a
-distinctOnCorrect proj q = Q.productQueryArr (O.distinctOnCorrect D.def proj . Q.runSimpleQueryArr q)
+distinctOnCorrect = distinctOnExplicit D.def
 
-
--- | Keep the row from each set where the given function returns the same result. The
---   row is chosen according to which comes first by the supplied ordering. However, no
---   output ordering is guaranteed. Mutliple fields may be distinguished by projecting
---   out tuples of 'Opaleye.Field.Field_'s.
+-- | Use 'distinctOnBy' instead.  Will be deprecated in 0.10.
 distinctOnByCorrect :: D.Default U.Unpackspec b b
                     => (a -> b)
                     -> O.Order a
                     -> S.Select a
                     -> S.Select a
-distinctOnByCorrect proj ord q = Q.productQueryArr (O.distinctOnByCorrect D.def proj ord . Q.runSimpleQueryArr q)
+distinctOnByCorrect = distinctOnByExplicit D.def
 
 
 -- * Other
 
 -- | Typeclass for Postgres types which support ordering operations.
 class SqlOrd a where
-
-{-# DEPRECATED PGOrd "Use SqlOrd instead" #-}
-type PGOrd = SqlOrd
 
 instance SqlOrd T.SqlBool
 instance SqlOrd T.SqlDate
@@ -172,19 +170,35 @@ instance SqlOrd T.SqlTimestamptz
 instance SqlOrd T.SqlTimestamp
 instance SqlOrd T.SqlCitext
 instance SqlOrd T.SqlUuid
-instance SqlOrd a => SqlOrd (C.Nullable a)
 
--- | Use 'distinctOnCorrect' instead.  This version has a bug whereby
--- it returns the whole query if zero columns are chosen to be
--- distinct (it should just return the first row).  Will be deprecated
--- in version 0.8.
+-- | Keep a row from each set where the given function returns the same result. No
+--   ordering is guaranteed. Multiple fields may be distinguished by projecting out
+--   tuples of 'Opaleye.Field.Field_'s. Use 'distinctOnBy' to control how the rows
+--   are chosen.
 distinctOn :: D.Default U.Unpackspec b b => (a -> b) -> S.Select a -> S.Select a
-distinctOn proj q = Q.productQueryArr (O.distinctOn D.def proj . Q.runSimpleQueryArr q)
+distinctOn = distinctOnCorrect
 
--- | Use 'distinctOnByCorrect' instead.  This version has a bug
--- whereby it returns the whole query if zero columns are chosen to be
--- distinct (it should just return the first row).  Will be deprecated
--- in version 0.8.
+-- | Keep the row from each set where the given function returns the same result. The
+--   row is chosen according to which comes first by the supplied ordering. However, no
+--   output ordering is guaranteed. Mutliple fields may be distinguished by projecting
+--   out tuples of 'Opaleye.Field.Field_'s.
 distinctOnBy :: D.Default U.Unpackspec b b => (a -> b) -> O.Order a
              -> S.Select a -> S.Select a
-distinctOnBy proj ord q = Q.productQueryArr (O.distinctOnBy D.def proj ord . Q.runSimpleQueryArr q)
+distinctOnBy = distinctOnByCorrect
+
+distinctOnExplicit :: U.Unpackspec b b
+                   -> (a -> b)
+                   -> S.Select a
+                   -> S.Select a
+distinctOnExplicit unpack proj q = Q.productQueryArr' $ \() -> do
+  a_pq <- Q.runSimpleQueryArr' q ()
+  pure (O.distinctOn unpack proj a_pq)
+
+distinctOnByExplicit :: U.Unpackspec b b
+                     -> (a -> b)
+                     -> O.Order a
+                     -> S.Select a
+                     -> S.Select a
+distinctOnByExplicit unpack proj ord q = Q.productQueryArr' $ \() -> do
+  a_pq <- Q.runSimpleQueryArr' q ()
+  pure (O.distinctOnBy unpack proj ord a_pq)

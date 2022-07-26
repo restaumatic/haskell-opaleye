@@ -7,7 +7,7 @@ module Opaleye.Internal.Manipulation where
 
 import qualified Control.Applicative as A
 
-import           Opaleye.Internal.Column (Column(Column))
+import           Opaleye.Internal.Column (Field_(Column), Field)
 import qualified Opaleye.Internal.HaskellDB.Sql  as HSql
 import qualified Opaleye.Internal.HaskellDB.Sql.Default  as SD
 import qualified Opaleye.Internal.HaskellDB.Sql.Generate as SG
@@ -32,9 +32,8 @@ import           Data.String                     (fromString)
 
 import qualified Database.PostgreSQL.Simple as PGS
 
--- | Don't use this internal datatype.  Instead you probably want
--- 'Opaleye.Manipulation.rCount' or 'Opaleye.Manipulation.rReturning'.
-data Returning a b where
+-- | Represents a @RETURNING@ statement for a manipulation query.
+data Returning fields haskells where
   Count
     :: Returning a Int64
   ReturningExplicit
@@ -129,7 +128,7 @@ runInsertManyReturningExplicit
                        (fromString
                         (arrangeInsertManyReturningSql u t columns' r
                                                        onConflict))
-  where IRQ.QueryRunner u _ _ = qr
+  where IRQ.FromFields u _ _ = qr
         parser = IRQ.prepareRowParser qr (r v)
         TI.View v = TI.tableColumnsView (TI.tableColumns t)
         -- This method of getting hold of the return type feels a bit
@@ -155,15 +154,15 @@ instance PP.ProductProfunctor Updater where
 
 --
 
-instance D.Default Updater (Column a) (Column a) where
+instance D.Default Updater (Field_ n a) (Field_ n a) where
   def = Updater id
 
-instance D.Default Updater (Column a) (Maybe (Column a)) where
+instance D.Default Updater (Field_ n a) (Maybe (Field_ n a)) where
   def = Updater Just
 
 arrangeDeleteReturning :: U.Unpackspec columnsReturned ignored
                        -> T.Table columnsW columnsR
-                       -> (columnsR -> Column SqlBool)
+                       -> (columnsR -> Field SqlBool)
                        -> (columnsR -> columnsReturned)
                        -> Sql.Returning HSql.SqlDelete
   -- this implementation was copied, it does not make sense yet
@@ -176,7 +175,7 @@ arrangeDeleteReturning unpackspec t cond returningf =
 
 arrangeDeleteReturningSql :: U.Unpackspec columnsReturned ignored
                           -> T.Table columnsW columnsR
-                          -> (columnsR -> Column SqlBool)
+                          -> (columnsR -> Field SqlBool)
                           -> (columnsR -> columnsReturned)
                           -> String
 arrangeDeleteReturningSql =
@@ -188,7 +187,7 @@ runDeleteReturning :: (D.Default RS.FromFields columnsReturned haskells)
                    -- ^
                    -> T.Table a columnsR
                    -- ^ Table to delete rows from
-                   -> (columnsR -> Column SqlBool)
+                   -> (columnsR -> Field SqlBool)
                    -- ^ Predicate function @f@ to choose which rows to delete.
                    -- 'runDeleteReturning' will delete rows for which @f@ returns @TRUE@
                    -- and leave unchanged rows for
@@ -201,73 +200,32 @@ runDeleteReturning = runDeleteReturningExplicit D.def
 runDeleteReturningExplicit :: RS.FromFields columnsReturned haskells
                            -> PGS.Connection
                            -> T.Table a columnsR
-                           -> (columnsR -> Column SqlBool)
+                           -> (columnsR -> Field SqlBool)
                            -> (columnsR -> columnsReturned)
                            -> IO [haskells]
 runDeleteReturningExplicit qr conn t cond r =
   PGS.queryWith_ parser conn
                  (fromString (arrangeDeleteReturningSql u t cond r))
-  where IRQ.QueryRunner u _ _ = qr
+  where IRQ.FromFields u _ _ = qr
         parser = IRQ.prepareRowParser qr (r v)
         TI.View v = TI.tableColumnsView (TI.tableColumns t)
 
-arrangeDelete :: T.Table a columnsR -> (columnsR -> Column SqlBool) -> HSql.SqlDelete
+arrangeDelete :: T.Table a columnsR -> (columnsR -> Field SqlBool) -> HSql.SqlDelete
 arrangeDelete = arrangeDeleteWith SD.defaultSqlGenerator
 
-arrangeDeleteWith :: SG.SqlGenerator -> T.Table a columnsR -> (columnsR -> Column SqlBool) -> HSql.SqlDelete
+arrangeDeleteWith :: SG.SqlGenerator -> T.Table a columnsR -> (columnsR -> Field SqlBool) -> HSql.SqlDelete
 arrangeDeleteWith sqlGenerator t cond =
   SG.sqlDelete sqlGenerator (PQ.tiToSqlTable (TI.tableIdentifier t)) [condExpr]
   where Column condExpr = cond tableCols
         TI.View tableCols = TI.tableColumnsView (TI.tableColumns t)
 
-runInsert :: PGS.Connection -> T.Table fields fields' -> fields -> IO Int64
-runInsert conn = PGS.execute_ conn . fromString .: arrangeInsertSql
-
-runInsertReturning :: (D.Default RS.FromFields fieldsReturned haskells)
-                   => PGS.Connection
-                   -> T.Table fieldsW fieldsR
-                   -> fieldsW
-                   -> (fieldsR -> fieldsReturned)
-                   -> IO [haskells]
-runInsertReturning = runInsertReturningExplicit D.def
-
-runInsertReturningExplicit :: RS.FromFields columnsReturned haskells
-                           -> PGS.Connection
-                           -> T.Table columnsW columnsR
-                           -> columnsW
-                           -> (columnsR -> columnsReturned)
-                           -> IO [haskells]
-runInsertReturningExplicit qr conn t =
-  runInsertManyReturningExplicitI qr conn t . return
-
-runInsertManyReturningExplicitI :: RS.FromFields columnsReturned haskells
-                                -> PGS.Connection
-                                -> T.Table columnsW columnsR
-                                -> [columnsW]
-                                -> (columnsR -> columnsReturned)
-                                -> IO [haskells]
-runInsertManyReturningExplicitI qr conn t columns f =
-  runInsertManyReturningExplicit qr conn t columns f Nothing
-
-arrangeInsert :: T.Table columns a -> columns -> HSql.SqlInsert
-arrangeInsert t c = arrangeInsertManyI t (return c)
-
-arrangeInsertSql :: T.Table columns a -> columns -> String
-arrangeInsertSql = show . HPrint.ppInsert .: arrangeInsert
-
-arrangeInsertManyI :: T.Table columns a -> NEL.NonEmpty columns -> HSql.SqlInsert
-arrangeInsertManyI t columns = arrangeInsertMany t columns Nothing
-
-arrangeInsertManySqlI :: T.Table columns a -> NEL.NonEmpty columns -> String
-arrangeInsertManySqlI t c  = arrangeInsertManySql t c Nothing
-
 arrangeUpdate :: T.Table columnsW columnsR
-              -> (columnsR -> columnsW) -> (columnsR -> Column SqlBool)
+              -> (columnsR -> columnsW) -> (columnsR -> Field SqlBool)
               -> HSql.SqlUpdate
 arrangeUpdate = arrangeUpdateWith SD.defaultSqlGenerator
 
 arrangeUpdateWith :: SG.SqlGenerator -> T.Table columnsW columnsR
-                  -> (columnsR -> columnsW) -> (columnsR -> Column SqlBool)
+                  -> (columnsR -> columnsW) -> (columnsR -> Field SqlBool)
                   -> HSql.SqlUpdate
 arrangeUpdateWith sqlGenerator t update cond =
   SG.sqlUpdate sqlGenerator
@@ -278,36 +236,20 @@ arrangeUpdateWith sqlGenerator t update cond =
         Column condExpr = cond tableCols
 
 arrangeUpdateSql :: T.Table columnsW columnsR
-              -> (columnsR -> columnsW) -> (columnsR -> Column SqlBool)
+              -> (columnsR -> columnsW) -> (columnsR -> Field SqlBool)
               -> String
 arrangeUpdateSql = show . HPrint.ppUpdate .:. arrangeUpdate
 
-arrangeDeleteSql :: T.Table a columnsR -> (columnsR -> Column SqlBool) -> String
+arrangeDeleteSql :: T.Table a columnsR -> (columnsR -> Field SqlBool) -> String
 arrangeDeleteSql = show . HPrint.ppDelete .: arrangeDelete
 
-arrangeDeleteSqlAnonymized :: T.Table a columnsR -> (columnsR -> Column SqlBool) -> String
+arrangeDeleteSqlAnonymized :: T.Table a columnsR -> (columnsR -> Field SqlBool) -> String
 arrangeDeleteSqlAnonymized = show . HPrint.ppDelete .: arrangeDeleteWith SD.anonymizingSqlGenerator
-
-arrangeInsertManyReturningI :: U.Unpackspec columnsReturned ignored
-                            -> T.Table columnsW columnsR
-                            -> NEL.NonEmpty columnsW
-                            -> (columnsR -> columnsReturned)
-                            -> Sql.Returning HSql.SqlInsert
-arrangeInsertManyReturningI unpackspec t columns returningf =
-  arrangeInsertManyReturning unpackspec t columns returningf Nothing
-
-arrangeInsertManyReturningSqlI :: U.Unpackspec columnsReturned ignored
-                               -> T.Table columnsW columnsR
-                               -> NEL.NonEmpty columnsW
-                               -> (columnsR -> columnsReturned)
-                               -> String
-arrangeInsertManyReturningSqlI u t c r =
-  arrangeInsertManyReturningSql u t c r Nothing
 
 arrangeUpdateReturning :: U.Unpackspec columnsReturned ignored
                        -> T.Table columnsW columnsR
                        -> (columnsR -> columnsW)
-                       -> (columnsR -> Column SqlBool)
+                       -> (columnsR -> Field SqlBool)
                        -> (columnsR -> columnsReturned)
                        -> Sql.Returning HSql.SqlUpdate
 arrangeUpdateReturning unpackspec t updatef cond returningf =
@@ -320,7 +262,7 @@ arrangeUpdateReturning unpackspec t updatef cond returningf =
 arrangeUpdateReturningSql :: U.Unpackspec columnsReturned ignored
                           -> T.Table columnsW columnsR
                           -> (columnsR -> columnsW)
-                          -> (columnsR -> Column SqlBool)
+                          -> (columnsR -> Field SqlBool)
                           -> (columnsR -> columnsReturned)
                           -> String
 arrangeUpdateReturningSql =

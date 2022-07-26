@@ -5,7 +5,7 @@
 
 module Opaleye.Internal.Table where
 
-import           Opaleye.Internal.Column (Column(Column), unColumn)
+import           Opaleye.Internal.Column (Field_(Column), unColumn)
 import qualified Opaleye.Internal.Tag as Tag
 import qualified Opaleye.Internal.Unpackspec as U
 import qualified Opaleye.Internal.PrimQuery as PQ
@@ -39,7 +39,7 @@ import qualified Control.Arrow as Arr
 --
 -- widgetTable :: Table (Widget (Maybe (Field SqlInt4)) (Field SqlText) (Field SqlText)
 --                              (Field SqlInt4) (Field SqlFloat8))
---                      (Widget (Field SqlText) (Field SqlText) (Field SqlText)
+--                      (Widget (Field SqlInt4) (Field SqlText) (Field SqlText)
 --                              (Field SqlInt4) (Field SqlFloat8))
 -- widgetTable = table \"widgetTable\"
 --                      (pWidget Widget { wid      = tableField \"id\"
@@ -48,17 +48,9 @@ import qualified Control.Arrow as Arr
 --                                      , quantity = tableField \"quantity\"
 --                                      , radius   = tableField \"radius\" })
 -- @
---
--- The constructors of Table are internal only and will be
--- removed in version 0.8.
 data Table writeFields viewFields
   = Table String (TableFields writeFields viewFields)
-    -- ^ For unqualified table names. Do not use the constructor.  It
-    -- is considered deprecated and will be removed in version 0.8.
   | TableWithSchema String String (TableFields writeFields viewFields)
-    -- ^ Schema name, table name, table properties.  Do not use the
-    -- constructor.  It is considered deprecated and will be removed
-    -- in version 0.8.
 
 tableIdentifier :: Table writeColumns viewColumns -> PQ.TableIdentifier
 tableIdentifier (Table t _) = PQ.TableIdentifier Nothing t
@@ -76,12 +68,6 @@ data TableFields writeColumns viewColumns = TableFields
    { tablePropertiesWriter :: Writer writeColumns viewColumns
    , tablePropertiesView   :: View viewColumns }
 
-{-# DEPRECATED TableColumns "Use 'TableFields' instead. 'TableColumns' will be removed in  version 0.8." #-}
-type TableColumns = TableFields
-
-{-# DEPRECATED TableProperties "Use 'TableFields' instead. 'TableProperties' will be removed in  version 0.8." #-}
-type TableProperties = TableFields
-
 tableColumnsWriter :: TableFields writeColumns viewColumns
                    -> Writer writeColumns viewColumns
 tableColumnsWriter = tablePropertiesWriter
@@ -90,10 +76,7 @@ tableColumnsView :: TableFields writeColumns viewColumns
                  -> View viewColumns
 tableColumnsView = tablePropertiesView
 
-{-# DEPRECATED View "Internal only.  Do not use.  'View' will be removed in version 0.8." #-}
 newtype View columns = View columns
-
-{-# DEPRECATED Writer "Internal only.  Do not use.  'Writer' will be removed in 0.8." #-}
 
 -- There's no reason the second parameter should exist except that we
 -- use ProductProfunctors more than ProductContravariants so it makes
@@ -110,7 +93,7 @@ newtype Writer columns dummy =
 
 -- | 'requiredTableField' is for fields which are not optional.  You
 -- must provide them on writes.
-requiredTableField :: String -> TableFields (Column a) (Column a)
+requiredTableField :: String -> TableFields (Field_ n a) (Field_ n a)
 requiredTableField columnName = TableFields
   (requiredW columnName)
   (View (Column (HPQ.BaseTableAttrExpr columnName)))
@@ -118,44 +101,40 @@ requiredTableField columnName = TableFields
 
 -- | 'optionalTableField' is for fields that you can omit on writes, such as
 --  fields which have defaults or which are SERIAL.
-optionalTableField :: String -> TableFields (Maybe (Column a)) (Column a)
+optionalTableField :: String -> TableFields (Maybe (Field_ n a)) (Field_ n a)
 optionalTableField columnName = TableFields
   (optionalW columnName)
   (View (Column (HPQ.BaseTableAttrExpr columnName)))
 
--- | 'readOnlyTableField' is for fields that you must omit on writes, such as
---  SERIAL fields intended to auto-increment only.
-readOnlyTableField :: String -> TableFields () (Column a)
+-- | Don't use 'readOnlyTableField'.  It will be formally deprecated
+-- in a future version.  It is broken for updates because it always
+-- updates its field with @DEFAULT@ which is very unlikely to be what
+-- you want!  For more details see
+-- <https://github.com/tomjaguarpaw/haskell-opaleye/issues/447#issuecomment-685617841>.
+readOnlyTableField :: String -> TableFields () (Field_ n a)
 readOnlyTableField = lmap (const Nothing) . optionalTableField
 
-{-# DEPRECATED required  "Use 'requiredTableField' instead.  Will be removed in version 0.8." #-}
-required :: String -> TableFields (Column a) (Column a)
-required = requiredTableField
-
-{-# DEPRECATED optional "Use 'optionalTableField' instead.  Will be removed in version 0.8." #-}
-optional :: String -> TableFields (Maybe (Column a)) (Column a)
-optional = optionalTableField
-
-{-# DEPRECATED readOnly "Use 'readOnlyTableField' instead.  Will be removed in version 0.8." #-}
-readOnly :: String -> TableFields () (Column a)
-readOnly = readOnlyTableField
-
-{-# DEPRECATED tableColumn "Use 'tableField' instead.  Will be removed in 0.8." #-}
-
-class TableColumn writeType sqlType | writeType -> sqlType where
-    tableColumn :: String -> TableFields writeType (Column sqlType)
-    tableColumn = tableField
+-- | You should not define your own instances of
+-- 'InferrableTableField'.
+class InferrableTableField w n r
+    | w -> n, w -> r where
     -- | Infer either a required ('requiredTableField') or optional
     -- ('optionalTableField') field depending on
     -- the write type.  It's generally more convenient to use this
     -- than 'required' or 'optional' but you do have to provide a type
     -- signature instead.
-    tableField  :: String -> TableFields writeType (Column sqlType)
+    tableField  :: String -> TableFields w (Field_ n r)
 
-instance TableColumn (Column a) a where
+-- | Equivalent to defining the column with 'requiredTableField'.  If
+-- the write type is @Field_ n r@ then the read type is also @Field_ n
+-- r@.
+instance InferrableTableField (Field_ n r) n r where
     tableField = requiredTableField
 
-instance TableColumn (Maybe (Column a)) a where
+-- | Equivalaent to defining the column with 'optionalTableField'. If
+-- the write type is @Maybe (Field_ n r)@ (i.e. @DEFAULT@ can be
+-- written to it) then the write type is @Field_ n r@.
+instance InferrableTableField (Maybe (Field_ n r)) n r where
     tableField = optionalTableField
 
 queryTable :: U.Unpackspec viewColumns columns
@@ -209,11 +188,11 @@ instance Monoid (Zip a) where
     where mempty' = [] `NEL.cons` mempty'
   mappend = (<>)
 
-requiredW :: String -> Writer (Column a) (Column a)
+requiredW :: String -> Writer (Field_ n a) (Field_ n a)
 requiredW columnName =
   Writer (PM.iso (flip (,) columnName . fmap unColumn) id)
 
-optionalW :: String -> Writer (Maybe (Column a)) (Column a)
+optionalW :: String -> Writer (Maybe (Field_ n a)) (Field_ n a)
 optionalW columnName =
   Writer (PM.iso (flip (,) columnName . fmap maybeUnColumn) id)
   where maybeUnColumn = maybe HPQ.DefaultInsertExpr unColumn

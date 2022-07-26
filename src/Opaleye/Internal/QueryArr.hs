@@ -1,3 +1,5 @@
+{-# OPTIONS_HADDOCK not-home #-}
+
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
@@ -17,79 +19,55 @@ import           Control.Arrow ((&&&), (***), arr, returnA)
 import qualified Control.Category as C
 import           Control.Category ((<<<), id)
 import           Control.Applicative (Applicative, pure, (<*>))
-import           Data.List.NonEmpty ( NonEmpty((:|)) )
+import           Control.Monad.Trans.State.Strict (State, runState, state)
 import qualified Data.Profunctor as P
 import qualified Data.Profunctor.Product as PP
-
--- Ideally this should be wrapped in a monad which automatically
--- increments the Tag, but I couldn't be bothered to do that.
---
--- The function 'Lateral -> PrimQuery -> PrimQuery' represents a
--- select arrow in the following way:
---
---    Lateral
--- -- ^ Whether to join me laterally
--- -> PrimQuery
--- -- ^ The query that I will be joined after.  If I refer to columns
--- -- in here in a way that is only valid when I am joined laterally,
--- -- then Lateral must be passed in as the argument above.
--- -> PrimQuery
--- -- ^ The result after joining me
---
--- It is *always* valid to pass Lateral as the first argument.  So why
--- wouldn't we do that?  Because we don't want to generate lateral
--- subqueries if they are not needed; it might have performance
--- implications.  Even though there is good evidence that it *doesn't*
--- have performance implications
--- (https://github.com/tomjaguarpaw/haskell-opaleye/pull/480) we still
--- want to be cautious.
+import           Data.Semigroup ((<>))
 
 -- | A parametrised 'Select'.  A @SelectArr a b@ accepts an argument
 -- of type @a@.
 --
 -- @SelectArr a b@ is analogous to a Haskell function @a -> [b]@.
-newtype SelectArr a b = QueryArr ((a, Tag) -> (b, PQ.Lateral -> PQ.PrimQuery -> PQ.PrimQuery, Tag))
+newtype SelectArr a b = QueryArr { unQueryArr :: a -> State Tag (b, PQ.PrimQueryArr) }
 
 type QueryArr = SelectArr
 type Query = SelectArr ()
 
-productQueryArr :: ((a, Tag) -> (b, PQ.PrimQuery, Tag)) -> QueryArr a b
-productQueryArr f = QueryArr g
-  where g (a0, t0) = (a1, \lat primQuery -> PQ.times lat primQuery primQuery', t1)
-          where (a1, primQuery', t1) = f (a0, t0)
+productQueryArr' :: (a -> State Tag (b, PQ.PrimQuery)) -> QueryArr a b
+productQueryArr' f = QueryArr $ \a -> do
+  (b, pq) <- f a
+  pure (b, PQ.aProduct pq)
 
-leftJoinQueryArr :: ((a, Tag) -> (b, HPQ.PrimExpr, PQ.PrimQuery, Tag)) -> QueryArr a b
-leftJoinQueryArr f = QueryArr g
-  where g (a0, t0) = (a1, \lat primQueryL ->
-                            PQ.Join PQ.LeftJoin cond (PQ.NonLateral, primQueryL) (lat, primQuery'), t1)
-          where (a1, cond, primQuery', t1) = f (a0, t0)
+leftJoinQueryArr' :: (a -> State Tag (b, HPQ.PrimExpr, PQ.PrimQuery)) -> QueryArr a b
+leftJoinQueryArr' f = QueryArr $ \a -> do
+  (a1, cond, primQuery') <- f a
+  pure (a1, PQ.aLeftJoin cond primQuery')
 
-{-# DEPRECATED simpleQueryArr "Use 'productQueryArr' instead. Its name indicates better what it actually does" #-}
-simpleQueryArr :: ((a, Tag) -> (b, PQ.PrimQuery, Tag)) -> QueryArr a b
-simpleQueryArr = productQueryArr
+runSimpleQueryArr' :: QueryArr a b -> a -> State Tag (b, PQ.PrimQuery)
+runSimpleQueryArr' f a = do
+  (b, pqf) <- unQueryArr f a
+  pure (b, PQ.toPrimQuery pqf)
 
-mapPrimQuery :: (PQ.PrimQuery -> PQ.PrimQuery) -> SelectArr a b -> SelectArr a b
-mapPrimQuery f sa =
-  QueryArr ((\(b, pqf, t) -> (b, \lat -> f . pqf lat, t)) . runQueryArr sa)
+runStateQueryArr :: QueryArr a b -> a -> Tag -> (b, PQ.PrimQueryArr, Tag)
+runStateQueryArr (QueryArr f) a tag =
+  let ((b, pq), tag') = runState (f a) tag
+  in (b, pq, tag')
 
-runQueryArr :: QueryArr a b -> (a, Tag) -> (b, PQ.Lateral -> PQ.PrimQuery -> PQ.PrimQuery, Tag)
-runQueryArr (QueryArr f) = f
-
--- Unit defines no columns so joining it non-LATERAL is OK.
-runSimpleQueryArr :: QueryArr a b -> (a, Tag) -> (b, PQ.PrimQuery, Tag)
-runSimpleQueryArr f = (\(b, pqf, t) -> (b, pqf PQ.NonLateral PQ.Unit, t)) . runQueryArr f
+stateQueryArr :: (a -> Tag -> (b, PQ.PrimQueryArr, Tag)) -> QueryArr a b
+stateQueryArr f = QueryArr $ \a -> state $ \tag ->
+  let (b, pq, tag') = f a tag
+  in ((b, pq), tag')
 
 runSimpleQueryArrStart :: QueryArr a b -> a -> (b, PQ.PrimQuery, Tag)
-runSimpleQueryArrStart q a = runSimpleQueryArr q (a, Tag.start)
+runSimpleQueryArrStart q a =
+  let ((b, pqa), t') = runState (runSimpleQueryArr' q a) Tag.start
+  in (b, pqa, t')
 
 runQueryArrUnpack :: U.Unpackspec a b
                   -> Query a -> ([HPQ.PrimExpr], PQ.PrimQuery, Tag)
 runQueryArrUnpack unpackspec q = (primExprs, primQ, endTag)
   where (columns, primQ, endTag) = runSimpleQueryArrStart q ()
         primExprs = U.collectPEs unpackspec columns
-
-first3 :: (a1 -> b) -> (a1, a2, a3) -> (b, a2, a3)
-first3 f (a1, a2, a3) = (f a1, a2, a3)
 
 -- | A @SELECT@, i.e. an SQL query which produces a collection of
 -- rows.
@@ -106,12 +84,9 @@ type Select = SelectArr ()
 -- 'Opaleye.Binary.union', 'Opaleye.Binary.intersect' and
 -- 'Opaleye.Binary.except' to two 'SelectArr's).
 lateral :: (i -> Select a) -> SelectArr i a
-lateral f = QueryArr qa
-  where
-    qa (i, tag) = (a, primQueryJoin, tag')
-      where
-        (a, primQueryR, tag') = runQueryArr (f i) ((), tag)
-        primQueryJoin _ = primQueryR PQ.Lateral
+lateral f = QueryArr $ \i -> do
+  (a, primQueryR) <- unQueryArr (f i) ()
+  pure (a, PQ.lateral primQueryR)
 
 -- | Convert an arrow argument into a function argument so that it can
 -- be applied inside @do@-notation rather than arrow notation.
@@ -129,21 +104,25 @@ arrowApply = lateral (\(f, i) -> viaLateral f i)
 
 instance C.Category QueryArr where
   id = arr id
-  QueryArr f . QueryArr g = QueryArr (\(a, t) ->
-                                        let (b, pqf, t') = g (a, t)
-                                            (c, pqf', t'') = f (b, t')
-                                        in (c, \lat -> pqf' lat . pqf lat, t''))
+  QueryArr f . QueryArr g = QueryArr $ \a -> do
+    (b, pqf)  <- g a
+    (c, pqf') <- f b
+    pure (c, pqf <> pqf')
 
 instance Arr.Arrow QueryArr where
-  arr f   = QueryArr (\(a, t) -> (f a, const id, t))
+  arr f   = QueryArr (\a -> pure (f a, mempty))
   first (QueryArr f) = QueryArr g
-    where g ((b, d), t0) = first3 (\c -> (c, d)) (f (b, t0))
+    where g (b, d) = do
+            (c, pq) <- f b
+            pure ((c, d), pq)
 
 instance Arr.ArrowChoice QueryArr where
   left (QueryArr f) = QueryArr g
-    where g (e, t0) = case e of
-            Left a -> first3 Left (f (a, t0))
-            Right b -> (Right b, const id, t0)
+    where g e = case e of
+            Left a -> do
+              (r, pq) <- f a
+              pure (Left r, pq)
+            Right b -> pure (Right b, mempty)
 
 instance Arr.ArrowApply QueryArr where
   app = arrowApply

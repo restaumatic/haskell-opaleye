@@ -45,6 +45,69 @@ instance Monoid Lateral where
   mappend = (<>)
   mempty = NonLateral
 
+aLeftJoin :: HPQ.PrimExpr -> PrimQuery -> PrimQueryArr
+aLeftJoin cond primQuery' = PrimQueryArr $ \lat primQueryL ->
+  Join LeftJoin cond (NonLateral, primQueryL) (lat, primQuery')
+
+aProduct :: PrimQuery -> PrimQueryArr
+aProduct pq = PrimQueryArr (\lat primQuery -> times lat primQuery pq)
+
+aSemijoin :: SemijoinType -> PrimQuery -> PrimQueryArr
+aSemijoin joint existsQ = PrimQueryArr $ \_ primQ -> Semijoin joint primQ existsQ
+
+aRebind :: Bindings HPQ.PrimExpr -> PrimQueryArr
+aRebind bindings = PrimQueryArr $ \_ -> Rebind True bindings
+
+aRestrict :: HPQ.PrimExpr -> PrimQueryArr
+aRestrict predicate = PrimQueryArr $ \_ -> restrict predicate
+
+aLabel :: String -> PrimQueryArr
+aLabel l = PrimQueryArr $ \_ primQ -> Label l primQ
+
+-- The function 'Lateral -> PrimQuery -> PrimQuery' represents a
+-- select arrow in the following way:
+--
+--    Lateral
+-- -- ^ Whether to join me laterally
+-- -> PrimQuery
+-- -- ^ The query that I will be joined after.  If I refer to columns
+-- -- in here in a way that is only valid when I am joined laterally,
+-- -- then Lateral must be passed in as the argument above.
+-- -> PrimQuery
+-- -- ^ The result after joining me
+--
+-- It is *always* valid to pass Lateral as the first argument.  So why
+-- wouldn't we do that?  Because we don't want to generate lateral
+-- subqueries if they are not needed; it might have performance
+-- implications.  Even though there is good evidence that it *doesn't*
+-- have performance implications
+-- (https://github.com/tomjaguarpaw/haskell-opaleye/pull/480) we still
+-- want to be cautious.
+--
+-- Not every function of type `Lateral -> PrimQuery -> PrimQuery` is
+-- valid to be a PrimQuery.  I think the condition that they must
+-- satisfy for validity is
+--
+--     q == lateral (aProduct (toPrimQuery q)
+--
+-- where == is observable equivalence, i.e. both queries must give the
+-- same results when combined with other queries and then run.
+newtype PrimQueryArr =
+  PrimQueryArr { runPrimQueryArr :: Lateral -> PrimQuery -> PrimQuery }
+
+instance Semigroup PrimQueryArr where
+  PrimQueryArr f1 <> PrimQueryArr f2 = PrimQueryArr (\lat -> f2 lat . f1 lat)
+
+instance Monoid PrimQueryArr where
+  mappend = (<>)
+  mempty = PrimQueryArr (\_ -> id)
+
+lateral :: PrimQueryArr -> PrimQueryArr
+lateral (PrimQueryArr pq) = PrimQueryArr (\_ -> pq Lateral)
+
+toPrimQuery :: PrimQueryArr -> PrimQuery
+toPrimQuery (PrimQueryArr f) = f NonLateral Unit
+
 -- We use a 'NEL.NonEmpty' for Product because otherwise we'd have to check
 -- for emptiness explicity in the SQL generation phase.
 
@@ -54,6 +117,7 @@ instance Monoid Lateral where
 -- convenient to allow 'Empty', but it is hard to represent 'Empty' in
 -- SQL so we remove it in 'Optimize' and set 'a = Void'.
 data PrimQuery' a = Unit
+                  -- Remove the Empty constructor in 0.10
                   | Empty     a
                   | BaseTable TableIdentifier (Bindings HPQ.PrimExpr)
                   | Product   (NEL.NonEmpty (Lateral, PrimQuery' a)) [HPQ.PrimExpr]

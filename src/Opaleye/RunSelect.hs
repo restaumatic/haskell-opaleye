@@ -29,10 +29,8 @@ module Opaleye.RunSelect
    runSelectTF,
    ) where
 
-import qualified Data.Profunctor            as P
 import qualified Database.PostgreSQL.Simple as PGS
 
-import qualified Opaleye.Column as C
 import qualified Opaleye.Select as S
 import qualified Opaleye.Internal.RunQueryExternal as RQ
 import qualified Opaleye.TypeFamilies as TF
@@ -68,7 +66,7 @@ runSelect :: D.Default FromFields fields haskells
           -> IO [haskells]
 runSelect = RQ.runQuery
 
--- | Will be deprecated in 0.8.  Use 'runSelectI' instead.
+{-# DEPRECATED runSelectTF "Use 'runSelectI' instead." #-}
 runSelectTF :: D.Default FromFields (rec TF.O) (rec TF.H)
             => PGS.Connection
             -- ^
@@ -130,9 +128,10 @@ foldForward = RQ.foldForward
 --
 -- @
 -- newtype Foo = Foo Int
+-- data SqlFoo
 --
--- instance DefaultFromField Foo Foo where
---    defaultFromField = unsafeFromField Foo defaultFromField
+-- instance 'IRQ.DefaultFromField' SqlFoo Foo where
+--    'IRQ.defaultFromField' = unsafeFromField Foo defaultFromField
 -- @
 --
 -- It is \"unsafe\" because it does not check that the @sqlType@
@@ -140,11 +139,8 @@ foldForward = RQ.foldForward
 unsafeFromField :: (b -> b')
                 -> IRQ.FromField sqlType b
                 -> IRQ.FromField sqlType' b'
-unsafeFromField haskellF qrc = IRQ.QueryRunnerColumn (P.lmap colF u)
-                                                     (fmapFP haskellF fp)
-  where IRQ.QueryRunnerColumn u fp = qrc
-        fmapFP = fmap . fmap . fmap
-        colF = C.unsafeCoerceColumn
+unsafeFromField haskellF (IRQ.FromField fp) =
+  fmap haskellF (IRQ.FromField fp)
 
 runSelectExplicit :: FromFields fields haskells
                   -> PGS.Connection

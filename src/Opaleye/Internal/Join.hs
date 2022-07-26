@@ -8,20 +8,18 @@ import qualified Opaleye.Internal.HaskellDB.PrimQuery as HPQ
 import qualified Opaleye.Internal.PackMap             as PM
 import qualified Opaleye.Internal.Tag                 as T
 import qualified Opaleye.Internal.Unpackspec          as U
-import           Opaleye.Internal.Column (Column(Column), Nullable)
+import           Opaleye.Internal.Column (Field_(Column), FieldNullable)
 import qualified Opaleye.Internal.QueryArr as Q
 import qualified Opaleye.Internal.Operators as Op
 import qualified Opaleye.Internal.PrimQuery as PQ
 import qualified Opaleye.Internal.PGTypesExternal as T
 import qualified Opaleye.Internal.Rebind as Rebind
 import qualified Opaleye.SqlTypes as T
-import qualified Opaleye.Column as C
+import qualified Opaleye.Field as C
 import           Opaleye.Field   (Field)
-import qualified Opaleye.Internal.Map as Map
 import           Opaleye.Internal.MaybeFields (MaybeFields(MaybeFields),
                                                mfPresent, mfFields)
 import qualified Opaleye.Select  as S
-import qualified Opaleye.Internal.TypeFamilies as TF
 
 import qualified Control.Applicative as A
 import qualified Control.Arrow
@@ -35,10 +33,10 @@ newtype NullMaker a b = NullMaker (a -> b)
 toNullable :: NullMaker a b -> a -> b
 toNullable (NullMaker f) = f
 
-instance D.Default NullMaker (Column a) (Column (Nullable a)) where
+instance D.Default NullMaker (Field a) (FieldNullable a) where
   def = NullMaker C.toNullable
 
-instance D.Default NullMaker (Column (Nullable a)) (Column (Nullable a)) where
+instance D.Default NullMaker (FieldNullable a) (FieldNullable a) where
   def = NullMaker id
 
 joinExplicit :: U.Unpackspec columnsA columnsA
@@ -47,42 +45,43 @@ joinExplicit :: U.Unpackspec columnsA columnsA
              -> (columnsB -> returnedColumnsB)
              -> PQ.JoinType
              -> Q.Query columnsA -> Q.Query columnsB
-             -> ((columnsA, columnsB) -> Column T.PGBool)
+             -> ((columnsA, columnsB) -> Field T.PGBool)
              -> Q.Query (returnedColumnsA, returnedColumnsB)
 joinExplicit uA uB returnColumnsA returnColumnsB joinType
-             qA qB cond = Q.productQueryArr q where
-  q ((), startTag) = ((nullableColumnsA, nullableColumnsB), primQueryR, T.next endTag)
-    where (columnsA, primQueryA, midTag) = Q.runSimpleQueryArr qA ((), startTag)
-          (columnsB, primQueryB, endTag) = Q.runSimpleQueryArr qB ((), midTag)
+             qA qB cond = Q.productQueryArr' $ \() -> do
+  (columnsA, primQueryA) <- Q.runSimpleQueryArr' qA ()
+  (columnsB, primQueryB) <- Q.runSimpleQueryArr' qB ()
 
-          (newColumnsA, ljPEsA) =
+  endTag <- T.fresh
+
+  let (newColumnsA, ljPEsA) =
             PM.run (U.runUnpackspec uA (extractLeftJoinFields 1 endTag) columnsA)
-          (newColumnsB, ljPEsB) =
+      (newColumnsB, ljPEsB) =
             PM.run (U.runUnpackspec uB (extractLeftJoinFields 2 endTag) columnsB)
 
-          nullableColumnsA = returnColumnsA newColumnsA
-          nullableColumnsB = returnColumnsB newColumnsB
+      nullableColumnsA = returnColumnsA newColumnsA
+      nullableColumnsB = returnColumnsB newColumnsB
 
-          Column cond' = cond (columnsA, columnsB)
-          primQueryR = PQ.Join joinType cond'
+      Column cond' = cond (columnsA, columnsB)
+      primQueryR = PQ.Join joinType cond'
                                (PQ.NonLateral, (PQ.Rebind True ljPEsA primQueryA))
                                (PQ.NonLateral, (PQ.Rebind True ljPEsB primQueryB))
+
+  pure ((nullableColumnsA, nullableColumnsB), primQueryR)
+
 
 leftJoinAExplicit :: U.Unpackspec a a
                   -> NullMaker a nullableA
                   -> Q.Query a
-                  -> Q.QueryArr (a -> Column T.PGBool) nullableA
+                  -> Q.QueryArr (a -> Field T.PGBool) nullableA
 leftJoinAExplicit uA nullmaker rq =
-  Q.leftJoinQueryArr $ \(p, t1) ->
-    let (newColumnsR, right, tag') = flip Q.runSimpleQueryArr ((), t1) $ proc () -> do
+  Q.leftJoinQueryArr' $ \p -> do
+    (newColumnsR, right) <- flip Q.runSimpleQueryArr' () $ proc () -> do
           a <- rq -< ()
           Rebind.rebindExplicit uA -< a
-        renamedNullable = toNullable nullmaker newColumnsR
+    let renamedNullable = toNullable nullmaker newColumnsR
         Column cond = p newColumnsR
-    in ( renamedNullable
-       , cond
-       , right
-       , tag')
+    pure (renamedNullable, cond, right)
 
 optionalRestrict :: D.Default U.Unpackspec a a
                  => S.Select a
@@ -94,7 +93,7 @@ optionalRestrictExplicit :: U.Unpackspec a a
                          -> S.SelectArr (a -> Field T.SqlBool) (MaybeFields a)
 optionalRestrictExplicit uA q =
   dimap (. snd) (\(nonNullIfPresent, rest) ->
-      let present = Op.not (C.isNull (C.unsafeCoerceColumn nonNullIfPresent))
+      let present = Op.not (C.isNull (C.unsafeCoerceField nonNullIfPresent))
       in MaybeFields { mfPresent = present
                      , mfFields  = rest
                      }) $
@@ -135,35 +134,3 @@ instance Profunctor NullMaker where
 instance PP.ProductProfunctor NullMaker where
   purePP = pure
   (****) = (<*>)
-
---
-
-{-# DEPRECATED Nulled "Will be removed in version 0.8" #-}
-data Nulled
-
-type instance TF.IMap Nulled TF.OT     = TF.NullsT
-type instance TF.IMap Nulled TF.NullsT = TF.NullsT
-
--- It's quite unfortunate that we have to write these out by hand
--- until we probably do nullability as a distinction between
---
--- Column (Nullable a)
--- Column (NonNullable a)
-
-type instance Map.Map Nulled (Column (Nullable a)) = Column (Nullable a)
-
-type instance Map.Map Nulled (Column T.PGInt4) = Column (Nullable T.PGInt4)
-type instance Map.Map Nulled (Column T.PGInt8) = Column (Nullable T.PGInt8)
-type instance Map.Map Nulled (Column T.PGText) = Column (Nullable T.PGText)
-type instance Map.Map Nulled (Column T.PGFloat8) = Column (Nullable T.PGFloat8)
-type instance Map.Map Nulled (Column T.PGBool) = Column (Nullable T.PGBool)
-type instance Map.Map Nulled (Column T.PGUuid) = Column (Nullable T.PGUuid)
-type instance Map.Map Nulled (Column T.PGBytea) = Column (Nullable T.PGBytea)
-type instance Map.Map Nulled (Column T.PGText) = Column (Nullable T.PGText)
-type instance Map.Map Nulled (Column T.PGDate) = Column (Nullable T.PGDate)
-type instance Map.Map Nulled (Column T.PGTimestamp) = Column (Nullable T.PGTimestamp)
-type instance Map.Map Nulled (Column T.PGTimestamptz) = Column (Nullable T.PGTimestamptz)
-type instance Map.Map Nulled (Column T.PGTime) = Column (Nullable T.PGTime)
-type instance Map.Map Nulled (Column T.PGCitext) = Column (Nullable T.PGCitext)
-type instance Map.Map Nulled (Column T.PGJson) = Column (Nullable T.PGJson)
-type instance Map.Map Nulled (Column T.PGJsonb) = Column (Nullable T.PGJsonb)

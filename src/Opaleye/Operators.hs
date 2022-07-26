@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE DataKinds #-}
 
 -- We can probably disable ConstraintKinds and TypeSynonymInstances
 -- when we move to Sql... instead of PG..
@@ -56,14 +57,12 @@ module Opaleye.Operators
   , upper
   , like
   , ilike
-  , charLength
   , sqlLength
   -- * Containment operators
   , in_
   , inSelect
   -- * JSON operators
   , SqlIsJson
-  , PGIsJson
   , SqlJsonIndex
   , PGJsonIndex
   , (.->)
@@ -106,26 +105,25 @@ module Opaleye.Operators
   , addInterval
   , minusInterval
   -- * Deprecated
-  , exists
-  , notExists
-  , inQuery
   , keepWhen
   )
 
   where
 
 import qualified Control.Arrow as A
-import qualified Data.Foldable as F
+import qualified Data.Foldable as F hiding (null)
 import qualified Data.List.NonEmpty as NEL
 import           Prelude hiding (not)
 import qualified Opaleye.Exists as E
 import qualified Opaleye.Field as F
-import           Opaleye.Internal.Column (Column(Column), unsafeCase_,
+import           Opaleye.Internal.Column (Field_(Column), Field, FieldNullable,
+                                          Nullability(Nullable),
+                                          unsafeCase_,
                                           unsafeIfThenElse, unsafeGt)
 import qualified Opaleye.Internal.Column as C
 import qualified Opaleye.Internal.JSONBuildObjectFields as JBOF
 import           Opaleye.Internal.QueryArr (SelectArr(QueryArr),
-                                            Query, QueryArr, runSimpleQueryArr)
+                                            runSimpleQueryArr')
 import qualified Opaleye.Internal.PrimQuery as PQ
 import qualified Opaleye.Internal.Operators as O
 import           Opaleye.Internal.Helpers   ((.:))
@@ -163,23 +161,25 @@ restrictExists :: S.SelectArr a b -> S.SelectArr a ()
 restrictExists criteria = QueryArr f where
   -- A where exists clause can always refer to columns defined by the
   -- query it references so needs no special treatment on LATERAL.
-  f (a, t0) = ((), \_ primQ -> PQ.Semijoin PQ.Semi primQ existsQ, t1) where
-    (_, existsQ, t1) = runSimpleQueryArr criteria (a, t0)
+  f a = do
+    (_, existsQ) <- runSimpleQueryArr' criteria a
+    pure ((), PQ.aSemijoin PQ.Semi existsQ)
 
 {-| Add a @WHERE NOT EXISTS@ clause to the current query. -}
 restrictNotExists :: S.SelectArr a b -> S.SelectArr a ()
 restrictNotExists criteria = QueryArr f where
   -- A where exists clause can always refer to columns defined by the
   -- query it references so needs no special treatment on LATERAL.
-  f (a, t0) = ((), \_ primQ -> PQ.Semijoin PQ.Anti primQ existsQ, t1) where
-    (_, existsQ, t1) = runSimpleQueryArr criteria (a, t0)
+  f a = do
+    (_, existsQ) <- runSimpleQueryArr' criteria a
+    pure ((), PQ.aSemijoin PQ.Anti existsQ)
 
 infix 4 .==
-(.==) :: Column a -> Column a -> F.Field T.SqlBool
+(.==) :: Field a -> Field a -> F.Field T.SqlBool
 (.==) = C.binOp (HPQ.:==)
 
 infix 4 ./=
-(./=) :: Column a -> Column a -> F.Field T.SqlBool
+(./=) :: Field a -> Field a -> F.Field T.SqlBool
 (./=) = C.binOp (HPQ.:<>)
 
 infix 4 .===
@@ -197,40 +197,40 @@ infix 4 ./==
 (./==) = Opaleye.Operators.not .: (O..==)
 
 infix 4 .>
-(.>) :: Ord.SqlOrd a => Column a -> Column a -> F.Field T.SqlBool
+(.>) :: Ord.SqlOrd a => Field a -> Field a -> F.Field T.SqlBool
 (.>) = unsafeGt
 
 infix 4 .<
-(.<) :: Ord.SqlOrd a => Column a -> Column a -> F.Field T.SqlBool
+(.<) :: Ord.SqlOrd a => Field a -> Field a -> F.Field T.SqlBool
 (.<) = C.binOp (HPQ.:<)
 
 infix 4 .<=
-(.<=) :: Ord.SqlOrd a => Column a -> Column a -> F.Field T.SqlBool
+(.<=) :: Ord.SqlOrd a => Field a -> Field a -> F.Field T.SqlBool
 (.<=) = C.binOp (HPQ.:<=)
 
 infix 4 .>=
-(.>=) :: Ord.SqlOrd a => Column a -> Column a -> F.Field T.SqlBool
+(.>=) :: Ord.SqlOrd a => Field a -> Field a -> F.Field T.SqlBool
 (.>=) = C.binOp (HPQ.:>=)
 
 -- | Integral division, named after 'Prelude.quot'.  It maps to the
 -- @/@ operator in Postgres.
-quot_ :: C.SqlIntegral a => Column a -> Column a -> Column a
+quot_ :: C.SqlIntegral a => Field a -> Field a -> Field a
 quot_ = C.binOp (HPQ.:/)
 
 -- | The remainder of integral division, named after 'Prelude.rem'.
 -- It maps to 'MOD' ('%') in Postgres, confusingly described as
 -- "modulo (remainder)".
-rem_ :: C.SqlIntegral a => Column a -> Column a -> Column a
+rem_ :: C.SqlIntegral a => Field a -> Field a -> Field a
 rem_ = C.binOp HPQ.OpMod
 
 -- | Select the first case for which the condition is true.
-case_ :: [(F.Field T.SqlBool, Column a)] -> Column a -> Column a
+case_ :: [(F.Field T.SqlBool, Field_ n a)] -> Field_ n a -> Field_ n a
 case_ = unsafeCase_
 
 -- | Monomorphic if\/then\/else.
 --
 -- This may be replaced by 'ifThenElseMany' in a future version.
-ifThenElse :: F.Field T.SqlBool -> Column a -> Column a -> Column a
+ifThenElse :: F.Field T.SqlBool -> Field_ n a -> Field_ n a -> Field_ n a
 ifThenElse = unsafeIfThenElse
 
 -- | Polymorphic if\/then\/else.
@@ -281,13 +281,7 @@ like = C.binOp HPQ.OpLike
 ilike :: F.Field T.SqlText -> F.Field T.SqlText -> F.Field T.SqlBool
 ilike = C.binOp HPQ.OpILike
 
--- {-# DEPRECATED charLength "You probably want to use 'sqlLength' instead" #-}
--- | Do not use.  Will be deprecated in 0.8.  You probably want to use
--- 'sqlLength' instead.
-charLength :: C.PGString a => Column a -> Column Int
-charLength (Column e) = Column (HPQ.FunExpr "char_length" [e])
-
-sqlLength :: C.PGString a => F.Field a -> F.Field T.SqlInt4
+sqlLength :: C.SqlString a => F.Field a -> F.Field T.SqlInt4
 sqlLength  (Column e) = Column (HPQ.FunExpr "length" [e])
 
 -- | 'in_' is designed to be used in prefix form.
@@ -295,10 +289,10 @@ sqlLength  (Column e) = Column (HPQ.FunExpr "length" [e])
 -- 'in_' @validProducts@ @product@ checks whether @product@ is a valid
 -- product.  'in_' @validProducts@ is a function which checks whether
 -- a product is a valid product.
-in_ :: (Functor f, F.Foldable f) => f (Column a) -> Column a -> F.Field T.SqlBool
-in_ fcas (Column a) = Column $ case NEL.nonEmpty (F.toList fcas) of
-   Nothing -> HPQ.ConstExpr (HPQ.BoolLit False)
-   Just xs -> HPQ.BinExpr HPQ.OpIn a (HPQ.ListExpr (fmap C.unColumn xs))
+in_ :: (Functor f, F.Foldable f) => f (Field a) -> Field a -> F.Field T.SqlBool
+in_ fcas (Column a) = case NEL.nonEmpty (F.toList fcas) of
+   Nothing -> T.sqlBool False
+   Just xs -> Column $ HPQ.BinExpr HPQ.OpIn a (HPQ.ListExpr (fmap C.unColumn xs))
 
 -- | True if the first argument occurs amongst the rows of the second,
 -- false otherwise.
@@ -312,10 +306,7 @@ inSelect c q = E.exists (keepWhen (c .===) A.<<< q)
 -- Used to overload functions and operators that work on both 'T.SqlJson' and 'T.SqlJsonb'.
 --
 -- Warning: making additional instances of this class can lead to broken code!
-class SqlIsJson a
-
-{-# DEPRECATED PGIsJson "Use SqlIsJson instead" #-}
-type PGIsJson = SqlIsJson
+class SqlIsJson json
 
 instance SqlIsJson T.SqlJson
 instance SqlIsJson T.SqlJsonb
@@ -325,6 +316,7 @@ instance SqlIsJson T.SqlJsonb
 -- Warning: making additional instances of this class can lead to broken code!
 class SqlJsonIndex a
 
+-- | Use 'SqlJsonIndex' instead. Will be deprecated in a future version.
 type PGJsonIndex = SqlJsonIndex
 
 instance SqlJsonIndex T.SqlInt4
@@ -333,33 +325,33 @@ instance SqlJsonIndex T.SqlText
 
 -- | Get JSON object field by key.
 infixl 8 .->
-(.->) :: (SqlIsJson a, SqlJsonIndex k)
-      => F.FieldNullable a -- ^
+(.->) :: (SqlIsJson json, SqlJsonIndex k)
+      => F.FieldNullable json -- ^
       -> F.Field k -- ^ key or index
-      -> F.FieldNullable a
+      -> F.FieldNullable json
 (.->) = C.binOp (HPQ.:->)
 
 -- | Get JSON object field as text.
 infixl 8 .->>
-(.->>) :: (SqlIsJson a, SqlJsonIndex k)
-       => F.FieldNullable a -- ^
+(.->>) :: (SqlIsJson json, SqlJsonIndex k)
+       => F.FieldNullable json -- ^
        -> F.Field k -- ^ key or index
        -> F.FieldNullable T.SqlText
 (.->>) = C.binOp (HPQ.:->>)
 
 -- | Get JSON object at specified path.
 infixl 8 .#>
-(.#>) :: (SqlIsJson a)
-      => F.FieldNullable a -- ^
-      -> Column (T.SqlArray T.SqlText) -- ^ path
-      -> F.FieldNullable a
+(.#>) :: (SqlIsJson json)
+      => F.FieldNullable json -- ^
+      -> Field (T.SqlArray T.SqlText) -- ^ path
+      -> F.FieldNullable json
 (.#>) = C.binOp (HPQ.:#>)
 
 -- | Get JSON object at specified path as text.
 infixl 8 .#>>
-(.#>>) :: (SqlIsJson a)
-       => F.FieldNullable a -- ^
-       -> Column (T.SqlArray T.SqlText) -- ^ path
+(.#>>) :: (SqlIsJson json)
+       => F.FieldNullable json -- ^
+       -> Field (T.SqlArray T.SqlText) -- ^ path
        -> F.FieldNullable T.SqlText
 (.#>>) = C.binOp (HPQ.:#>>)
 
@@ -381,89 +373,89 @@ infix 4 .?
 -- | Do any of these key/element strings exist?
 infix 4 .?|
 (.?|) :: F.Field T.SqlJsonb
-      -> Column (T.SqlArray T.SqlText)
+      -> Field (T.SqlArray T.SqlText)
       -> F.Field T.SqlBool
 (.?|) = C.binOp (HPQ.:?|)
 
 -- | Do all of these key/element strings exist?
 infix 4 .?&
 (.?&) :: F.Field T.SqlJsonb
-      -> Column (T.SqlArray T.SqlText)
+      -> Field (T.SqlArray T.SqlText)
       -> F.Field T.SqlBool
 (.?&) = C.binOp (HPQ.:?&)
 
-emptyArray :: T.IsSqlType a => Column (T.SqlArray a)
+emptyArray :: T.IsSqlType a => Field (T.SqlArray_ n a)
 emptyArray = T.sqlArray id []
 
 -- | Append two 'T.SqlArray's
-arrayAppend :: F.Field (T.SqlArray a) -> F.Field (T.SqlArray a) -> F.Field (T.SqlArray a)
+arrayAppend :: F.Field (T.SqlArray_ n a) -> F.Field (T.SqlArray_ n a) -> F.Field (T.SqlArray_ n a)
 arrayAppend = C.binOp (HPQ.:||)
 
 -- | Prepend an element to a 'T.SqlArray'
-arrayPrepend :: Column a -> Column (T.SqlArray a) -> Column (T.SqlArray a)
+arrayPrepend :: Field_ n a -> Field (T.SqlArray_ n a) -> Field (T.SqlArray_ n a)
 arrayPrepend (Column e) (Column es) = Column (HPQ.FunExpr "array_prepend" [e, es])
 
 -- | Remove all instances of an element from a 'T.SqlArray'
-arrayRemove :: Column a -> Column (T.SqlArray a) -> Column (T.SqlArray a)
+arrayRemove :: Field_ n a -> Field (T.SqlArray_ n a) -> Field (T.SqlArray_ n a)
 arrayRemove (Column e) (Column es) = Column (HPQ.FunExpr "array_remove" [es, e])
 
 -- | Remove all 'NULL' values from a 'T.SqlArray'
-arrayRemoveNulls :: Column (T.SqlArray (C.Nullable a)) -> Column (T.SqlArray a)
-arrayRemoveNulls = Column.unsafeCoerceColumn . arrayRemove Column.null
+arrayRemoveNulls :: Field (T.SqlArray_ Nullable a) -> Field (T.SqlArray a)
+arrayRemoveNulls = Column.unsafeCoerceColumn . arrayRemove F.null
 
-singletonArray :: T.IsSqlType a => Column a -> Column (T.SqlArray a)
+singletonArray :: T.IsSqlType a => Field_ n a -> Field (T.SqlArray_ n a)
 singletonArray x = arrayPrepend x emptyArray
 
-index :: (C.SqlIntegral n) => Column (T.SqlArray a) -> Column n -> Column (C.Nullable a)
+index :: (C.SqlIntegral n) => Field (T.SqlArray_ n' a) -> Field n -> FieldNullable a
 index (Column a) (Column b) = Column (HPQ.ArrayIndex a b)
 
 -- | Postgres's @array_position@
-arrayPosition :: F.Field (T.SqlArray a) -- ^ Haystack
-              -> F.Field a -- ^ Needle
-              -> F.Field (Column.Nullable T.SqlInt4)
+arrayPosition :: F.Field (T.SqlArray_ n a) -- ^ Haystack
+              -> F.Field_ n a -- ^ Needle
+              -> F.FieldNullable T.SqlInt4
 arrayPosition (Column fs) (Column f') =
   C.Column (HPQ.FunExpr "array_position" [fs , f'])
 
 -- | Whether the element (needle) exists in the array (haystack).
 -- N.B. this is implemented hackily using @array_position@.  If you
 -- need it to be implemented using @= any@ then please open an issue.
-sqlElem :: F.Field a -- ^ Needle
-        -> F.Field (T.SqlArray a) -- ^ Haystack
+sqlElem :: F.Field_ n a -- ^ Needle
+        -> F.Field (T.SqlArray_ n a) -- ^ Haystack
         -> F.Field T.SqlBool
 sqlElem f fs = (O.not . F.isNull . arrayPosition fs) f
 
-overlap :: Column (T.SqlRange a) -> Column (T.SqlRange a) -> F.Field T.SqlBool
+overlap :: Field (T.SqlRange a) -> Field (T.SqlRange a) -> F.Field T.SqlBool
 overlap = C.binOp (HPQ.:&&)
 
-liesWithin :: T.IsRangeType a => Column a -> Column (T.SqlRange a) -> F.Field T.SqlBool
+liesWithin :: T.IsRangeType a => Field a -> Field (T.SqlRange a) -> F.Field T.SqlBool
 liesWithin = C.binOp (HPQ.:<@)
 
 -- | Access the upper bound of a range. For discrete range types it is the exclusive bound.
-upperBound :: T.IsRangeType a => Column (T.SqlRange a) -> Column (C.Nullable a)
+upperBound :: T.IsRangeType a => Field (T.SqlRange a) -> FieldNullable a
 upperBound (Column range) = Column $ HPQ.FunExpr "upper" [range]
 
 -- | Access the lower bound of a range. For discrete range types it is the inclusive bound.
-lowerBound :: T.IsRangeType a => Column (T.SqlRange a) -> Column (C.Nullable a)
+lowerBound :: T.IsRangeType a => Field (T.SqlRange a) -> FieldNullable a
 lowerBound (Column range) = Column $ HPQ.FunExpr "lower" [range]
 
 infix 4 .<<
-(.<<) :: Column (T.SqlRange a) -> Column (T.SqlRange a) -> F.Field T.SqlBool
+(.<<) :: Field (T.SqlRange a) -> Field (T.SqlRange a) -> F.Field T.SqlBool
 (.<<) = C.binOp (HPQ.:<<)
 
 infix 4 .>>
-(.>>) :: Column (T.SqlRange a) -> Column (T.SqlRange a) -> F.Field T.SqlBool
+(.>>) :: Field (T.SqlRange a) -> Field (T.SqlRange a) -> F.Field T.SqlBool
 (.>>) = C.binOp (HPQ.:>>)
 
 infix 4 .&<
-(.&<) :: Column (T.SqlRange a) -> Column (T.SqlRange a) -> F.Field T.SqlBool
+(.&<) :: Field (T.SqlRange a) -> Field (T.SqlRange a) -> F.Field T.SqlBool
 (.&<) = C.binOp (HPQ.:&<)
 
 infix 4 .&>
-(.&>) :: Column (T.SqlRange a) -> Column (T.SqlRange a) -> F.Field T.SqlBool
+(.&>) :: Field (T.SqlRange a) -> Field (T.SqlRange a) -> F.Field T.SqlBool
 (.&>) = C.binOp (HPQ.:&>)
 
 infix 4 .-|-
-(.-|-) :: Column (T.SqlRange a) -> Column (T.SqlRange a) -> F.Field T.SqlBool
+(.-|-) :: Field (T.SqlRange a) -> Field (T.SqlRange a) -> F.Field T.SqlBool
 (.-|-) = C.binOp (HPQ.:-|-)
 
 timestamptzAtTimeZone :: F.Field T.SqlTimestamptz
@@ -495,32 +487,7 @@ addInterval = C.binOp (HPQ.:+)
 minusInterval :: IntervalNum from to => F.Field from -> F.Field T.SqlInterval -> F.Field to
 minusInterval = C.binOp (HPQ.:-)
 
-{-# DEPRECATED exists "Identical to 'restrictExists'.  Will be removed in version 0.8." #-}
-exists :: QueryArr a b -> QueryArr a ()
-exists = restrictExists
-
-{-# DEPRECATED notExists "Identical to 'restrictNotExists'.  Will be removed in version 0.8." #-}
-notExists :: QueryArr a b -> QueryArr a ()
-notExists = restrictNotExists
-
-{-# DEPRECATED inQuery "Identical to 'inSelect'.  Will be removed in version 0.8." #-}
-inQuery :: D.Default O.EqPP fields fields
-        => fields -> Query fields -> S.Select (F.Field T.SqlBool)
-inQuery = inSelect
-
-{-| This function is probably not useful and is likely to be deprecated
-  in the future.
-
-Keep only the rows of a query satisfying a given condition, using
-an SQL @WHERE@ clause.
-
-You would typically use 'keepWhen' if you want to write
-your query using a "point free" style.  If you want to use 'A.Arrow'
-notation then 'restrict' will suit you better.
-
-This is the 'S.SelectArr' equivalent of 'Prelude.filter' from the
-'Prelude'.
--}
+{-# DEPRECATED keepWhen "Use 'where_' or 'restrict' instead.  Will be removed in version 0.10." #-}
 keepWhen :: (a -> F.Field T.SqlBool) -> S.SelectArr a a
 keepWhen p = proc a -> do
   restrict  -< p a
