@@ -3,10 +3,17 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages: []
+packages:
+- completed:
+    hackage: product-profunctors-0.11.0.3@sha256:2f87ec174e9a49ee5c0ed2f0a078fe55a1842fed5879c812fa8e3da3d7f834f2,2478
+    pantry-tree:
+      size: 1538
+      sha256: 0935d0af8de1003652cf53d99a7c6048f9b5150fd0c22d63fc024f375a2d9aca
+  original:
+    hackage: product-profunctors-0.11.0.3@sha256:2f87ec174e9a49ee5c0ed2f0a078fe55a1842fed5879c812fa8e3da3d7f834f2,2478
 snapshots:
 - completed:
-    size: 619163
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/19/16.yaml
-    sha256: a27a5761890ade44d7dd21a5f5f93c87e60b9c063655fff835d69dd1071474f0
-  original: lts-19.16
+    size: 586041
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/11.yaml
+    sha256: ae30d25a4691c6bb32b5766c617dff24270b2b3576ebd6047d754418e9256389
+  original: lts-18.11
