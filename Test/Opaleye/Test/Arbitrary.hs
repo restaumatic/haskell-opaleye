@@ -13,6 +13,7 @@ import           Prelude hiding (compare, (.), id)
 import           Opaleye.Test.Fields
 
 import qualified Opaleye as O
+import qualified Opaleye.Exists as OE
 import qualified Opaleye.Join as OJ
 
 import           Control.Applicative (pure, (<$>), (<*>), liftA2)
@@ -492,6 +493,15 @@ genSelectMapper =
                             . fmap listFields)
                            (O.optionalRestrictExplicit unpackFields q)
         return q'
+    , do
+        thisLabel <- TQ.arbitrary
+        pure $ \select -> do
+          O.label' thisLabel
+          select
+    , do
+        pure $ \select -> do
+          exists <- OE.exists select
+          pure (Choices [Left (CBool exists)])
     ]
 
 genSelectMapper2 :: [TQ.Gen (O.Select Fields -> O.Select Fields
@@ -515,9 +525,7 @@ genSelectMapper2 =
 
 genSelectArrMapper :: [TQ.Gen (O.SelectArr a Fields -> O.SelectArr a Fields)]
 genSelectArrMapper =
-    [ do
-        thisLabel        <- TQ.arbitrary
-        return (O.label thisLabel)
+    [
     ]
 
 genSelectArrMaybeMapper :: [TQ.Gen (O.SelectArr a Fields

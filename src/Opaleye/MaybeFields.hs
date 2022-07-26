@@ -7,17 +7,24 @@
 -- 'Opaleye.Join.optionalRestrict' and 'Opaleye.Join.optional'.
 
 module Opaleye.MaybeFields (
+  -- * 'MaybeFields' type
   MaybeFields,
+  -- * Creating a 'MaybeFields'
   nothingFields,
+  nothingFieldsOfTypeOf,
   justFields,
+  nullableToMaybeFields,
+  -- * Using a 'MaybeFields'
   matchMaybe,
   fromMaybeFields,
   maybeFields,
-  maybeFieldsToSelect,
-  nothingFieldsOfTypeOf,
-  catMaybeFields,
+  maybeFieldsToNullable,
+  -- * Creating a 'Select' which returns 'MaybeFields'
   Opaleye.Join.optional,
   Opaleye.MaybeFields.traverseMaybeFields,
+  -- * Using a 'Select' which returns 'MaybeFields'
+  catMaybeFields,
+  maybeFieldsToSelect,
   -- * Adaptors
   Nullspec,
   nullspecField,

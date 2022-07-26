@@ -2,7 +2,7 @@
 
 module Opaleye.Internal.Values where
 
-import           Opaleye.Internal.Column (Column(Column))
+import           Opaleye.Internal.Column (Field_(Column))
 import qualified Opaleye.Internal.Unpackspec as U
 import qualified Opaleye.Internal.Tag as T
 import qualified Opaleye.Internal.PrimQuery as PQ
@@ -17,6 +17,7 @@ import           Data.Profunctor (Profunctor, dimap, rmap, lmap)
 import           Data.Profunctor.Product (ProductProfunctor)
 import qualified Data.Profunctor.Product as PP
 import           Data.Profunctor.Product.Default (Default, def)
+import           Data.Void (Void, absurd)
 
 import           Control.Applicative (Applicative, pure, (<*>))
 
@@ -25,8 +26,8 @@ import           Control.Applicative (Applicative, pure, (<*>))
 valuesU :: U.Unpackspec columns columns'
         -> ValuesspecUnsafe columns columns'
         -> [columns]
-        -> ((), T.Tag) -> (columns', PQ.PrimQuery, T.Tag)
-valuesU unpack valuesspec rows ((), t) = (newColumns, primQ', T.next t)
+        -> ((), T.Tag) -> (columns', PQ.PrimQuery)
+valuesU unpack valuesspec rows ((), t) = (newColumns, primQ')
   where runRow row = valuesRow
            where (_, valuesRow) =
                    PM.run (U.runUnpackspec unpack extractValuesEntry row)
@@ -62,14 +63,14 @@ runValuesspec :: Applicative f => ValuesspecUnsafe columns columns'
               -> (() -> f HPQ.PrimExpr) -> f columns'
 runValuesspec (Valuesspec v) f = PM.traversePM v f ()
 
-instance Default ValuesspecUnsafe (Column a) (Column a) where
+instance Default ValuesspecUnsafe (Field_ n a) (Field_ n a) where
   def = Valuesspec (PM.iso id Column)
 
 valuesUSafe :: Valuesspec columns columns'
             -> [columns]
-            -> ((), T.Tag) -> (columns', PQ.PrimQuery, T.Tag)
+            -> ((), T.Tag) -> (columns', PQ.PrimQuery)
 valuesUSafe valuesspec@(ValuesspecSafe _ unpack) rows ((), t) =
-  (newColumns, primQ', T.next t)
+  (newColumns, primQ')
   where runRow row =
           case PM.run (U.runUnpackspec unpack extractValuesEntry row) of
             (_, []) -> [zero]
@@ -97,10 +98,11 @@ valuesUSafe valuesspec@(ValuesspecSafe _ unpack) rows ((), t) =
 
         primQ' = wrap (PQ.Values valuesPEs values)
 
-data Valuesspec columns columns' =
-  ValuesspecSafe (PM.PackMap HPQ.PrimExpr HPQ.PrimExpr () columns')
-                 (U.Unpackspec columns columns')
+data Valuesspec fields fields' =
+  ValuesspecSafe (PM.PackMap HPQ.PrimExpr HPQ.PrimExpr () fields')
+                 (U.Unpackspec fields fields')
 
+{-# DEPRECATED ValuesspecSafe "Use Valuesspec instead.  Will be removed in version 0.10." #-}
 type ValuesspecSafe = Valuesspec
 
 runValuesspecSafe :: Applicative f
@@ -110,18 +112,18 @@ runValuesspecSafe :: Applicative f
 runValuesspecSafe (ValuesspecSafe v _) f = PM.traversePM v f ()
 
 valuesspecField :: Opaleye.SqlTypes.IsSqlType a
-                => Valuesspec (Column a) (Column a)
+                => Valuesspec (Field_ n a) (Field_ n a)
 valuesspecField = def
 
 instance Opaleye.Internal.PGTypes.IsSqlType a
-  => Default Valuesspec (Column a) (Column a) where
+  => Default Valuesspec (Field_ n a) (Field_ n a) where
   def = def_
     where def_ = ValuesspecSafe (PM.PackMap (\f () -> fmap Column (f null_)))
                                 U.unpackspecField
           null_ = nullPE sqlType
 
           sqlType = columnProxy def_
-          columnProxy :: f (Column sqlType) -> Maybe sqlType
+          columnProxy :: f (Field_ n sqlType) -> Maybe sqlType
           columnProxy _ = Nothing
 
 nullPE :: Opaleye.SqlTypes.IsSqlType a => proxy a -> HPQ.PrimExpr
@@ -129,16 +131,11 @@ nullPE sqlType = HPQ.CastExpr (Opaleye.Internal.PGTypes.showSqlType sqlType)
                               (HPQ.ConstExpr HPQ.NullLit)
 
 -- Implementing this in terms of Valuesspec for convenience
-newtype Nullspec fields fields' = Nullspec (Valuesspec fields fields')
+newtype Nullspec fields fields' = Nullspec (Valuesspec Void fields')
 
 nullspecField :: Opaleye.SqlTypes.IsSqlType b
-              => Nullspec a (Column b)
-nullspecField = Nullspec (lmap e valuesspecField)
-  where e = error (concat [ "We looked at the argument of a Nullspec when we "
-                          , "expected that we never would!  This is a bug in "
-                          , "Opaleye.  Please report it, if you can reproduce "
-                          , "it."
-                          ])
+              => Nullspec a (Field_ n b)
+nullspecField = Nullspec (lmap absurd valuesspecField)
 
 nullspecList :: Nullspec a [b]
 nullspecList = pure []
@@ -152,7 +149,7 @@ nullspecEitherRight :: Nullspec a b'
 nullspecEitherRight = fmap Right
 
 instance Opaleye.SqlTypes.IsSqlType b
-  => Default Nullspec a (Column b) where
+  => Default Nullspec a (Field_ n b) where
   def = nullspecField
 
 -- | All fields @NULL@, even though technically the type may forbid
@@ -202,7 +199,7 @@ instance Applicative (Nullspec a) where
   Nullspec f <*> Nullspec x = Nullspec (f <*> x)
 
 instance Profunctor Nullspec where
-  dimap f g (Nullspec q) = Nullspec (dimap f g q)
+  dimap _ g (Nullspec q) = Nullspec (fmap g q)
 
 instance ProductProfunctor Nullspec where
   purePP = pure

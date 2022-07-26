@@ -6,34 +6,37 @@ module Opaleye.Values(
   valuesExplicit,
   -- * Adaptors
   V.Valuesspec,
-  V.ValuesspecSafe,
   V.valuesspecField,
   -- * Deprecated versions
   valuesSafe,
   valuesSafeExplicit,
   valuesUnsafe,
   valuesUnsafeExplicit,
+  V.ValuesspecSafe,
   ) where
 
 import qualified Opaleye.Internal.QueryArr as Q
+import qualified Opaleye.Internal.Tag as Tag
 import           Opaleye.Internal.Values as V
 import qualified Opaleye.Internal.Unpackspec as U
 import qualified Opaleye.Select              as S
 
 import           Data.Profunctor.Product.Default (Default, def)
 
--- | Do not use.  Will be deprecated in 0.8.
+{-# DEPRECATED valuesUnsafe "Use 'values' instead.  Will be removed in 0.10." #-}
 valuesUnsafe :: (Default V.ValuesspecUnsafe fields fields,
                  Default U.Unpackspec fields fields) =>
                 [fields] -> S.Select fields
 valuesUnsafe = valuesUnsafeExplicit def def
 
--- | Do not use.  Will be deprecated in 0.8.
+{-# DEPRECATED valuesUnsafeExplicit "Use 'values' instead.  Will be removed in 0.10." #-}
 valuesUnsafeExplicit :: U.Unpackspec fields fields'
                      -> V.ValuesspecUnsafe fields fields'
                      -> [fields] -> S.Select fields'
 valuesUnsafeExplicit unpack valuesspec fields =
-  Q.productQueryArr (V.valuesU unpack valuesspec fields)
+  Q.productQueryArr' $ \() -> do
+  t <- Tag.fresh
+  pure (V.valuesU unpack valuesspec fields ((), t))
 
 -- | 'values' implements Postgres's @VALUES@ construct and allows you
 -- to create a @SELECT@ that consists of the given rows.
@@ -57,14 +60,16 @@ values = valuesExplicit def
 valuesExplicit :: V.Valuesspec fields fields'
                -> [fields] -> S.Select fields'
 valuesExplicit valuesspec fields =
-  Q.productQueryArr (V.valuesUSafe valuesspec fields)
+  Q.productQueryArr' $ \() -> do
+    t <- Tag.fresh
+    pure (V.valuesUSafe valuesspec fields ((), t))
 
--- | Use 'values' instead.  Will be deprecated in 0.8.
+{-# DEPRECATED valuesSafe "Use 'values' instead.  Will be removed in 0.10." #-}
 valuesSafe :: Default V.Valuesspec fields fields
            => [fields] -> S.Select fields
 valuesSafe = values
 
--- | Use 'valuesExplicit' instead.  Will be deprecated in 0.8.
+{-# DEPRECATED valuesSafeExplicit "Use 'values' instead.  Will be removed in 0.10." #-}
 valuesSafeExplicit :: V.Valuesspec fields fields'
                    -> [fields] -> S.Select fields'
 valuesSafeExplicit = valuesExplicit

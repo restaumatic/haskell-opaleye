@@ -1,5 +1,8 @@
+{-# OPTIONS_HADDOCK not-home #-}
+
 {-# LANGUAGE FlexibleContexts, FlexibleInstances, MultiParamTypeClasses #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
 
 module Opaleye.Internal.RunQuery where
 
@@ -11,15 +14,15 @@ import qualified Database.PostgreSQL.Simple.Cursor  as PGSC (Cursor)
 import           Database.PostgreSQL.Simple.Internal (RowParser)
 import qualified Database.PostgreSQL.Simple.FromField as PGS
 import           Database.PostgreSQL.Simple.FromField
-  (FieldParser, fromField, pgArrayFieldParser)
+  (FieldParser, fromField, pgArrayFieldParser, optionalField)
 import           Database.PostgreSQL.Simple.FromRow (fromRow, fieldWith)
 import           Database.PostgreSQL.Simple.Types (fromPGArray, Only(..))
+import           Database.PostgreSQL.Simple.Newtypes ( Aeson )
 
-import           Opaleye.Column (Column)
-import           Opaleye.Internal.Column (Nullable)
+import           Opaleye.Internal.Column (Field_, Field, FieldNullable,
+                                          Nullability(Nullable, NonNullable))
 import qualified Opaleye.Internal.PackMap as PackMap
 import qualified Opaleye.Internal.QueryArr as Q
-import qualified Opaleye.Column as C
 import qualified Opaleye.Internal.Unpackspec as U
 import qualified Opaleye.Internal.PGTypesExternal as T
 import qualified Opaleye.Internal.PGTypes as IPT (strictDecodeUtf8)
@@ -73,13 +76,11 @@ import           Data.Typeable (Typeable)
 -- be that we can't add nullability to a RowParser, only to a
 -- FieldParser, so we have to have some type that we know contains
 -- just a FieldParser.
-data FromField pgType haskellType =
-  QueryRunnerColumn (U.Unpackspec (Column pgType) ()) (FieldParser haskellType)
+
+newtype FromField sqlType haskellType = FromField (FieldParser haskellType)
 
 instance Functor (FromField u) where
-  fmap f ~(QueryRunnerColumn u fp) = QueryRunnerColumn u ((fmap . fmap . fmap) f fp)
-
-type QueryRunnerColumn = FromField
+  fmap f (FromField fp) = FromField ((fmap . fmap . fmap) f fp)
 
 -- | A 'FromFields'
 --   specifies how to convert Postgres values (@fields@)
@@ -89,14 +90,14 @@ type QueryRunnerColumn = FromField
 --
 -- \"'FromFields' @fields@ @haskells@\" corresponds to
 -- postgresql-simple's \"'RowParser' @haskells@\".  \"'Default'
--- 'FromFields' @columns@ @haskells@\" corresponds to
+-- 'FromFields' @fields@ @haskells@\" corresponds to
 -- postgresql-simple's \"@FromRow@ @haskells@\".
-data FromFields columns haskells =
-  QueryRunner (U.Unpackspec columns ())
-              (columns -> RowParser haskells)
+data FromFields fields haskells =
+   FromFields (U.Unpackspec fields ())
+              (fields -> RowParser haskells)
               -- We never actually look at the columns except to see
               -- its "type" in the case of a sum profunctor
-              (columns -> Int)
+              (fields -> Int)
               -- How many columns have we requested?  If we
               -- asked for zero columns then the SQL generator will
               -- have to put a dummy 0 into the SELECT statement,
@@ -110,45 +111,46 @@ data FromFields columns haskells =
               -- SqlInt4)' has no columns when it is Nothing and one
               -- column when it is Just.
 
-type QueryRunner = FromFields
-
+{-# DEPRECATED fieldQueryRunnerColumn "Will be removed in version 0.10.  Use fromPGSFromField instead." #-}
 fieldQueryRunnerColumn :: PGS.FromField haskell => FromField pgType haskell
 fieldQueryRunnerColumn = fromPGSFromField
 
 fromPGSFromField :: PGS.FromField haskell => FromField pgType haskell
-fromPGSFromField = fieldParserQueryRunnerColumn fromField
+fromPGSFromField = fromPGSFieldParser fromField
 
+{-# DEPRECATED fieldParserQueryRunnerColumn " Will be removed in version 0.10.  Use fromPGSFieldParser instead." #-}
 fieldParserQueryRunnerColumn :: FieldParser haskell -> FromField pgType haskell
 fieldParserQueryRunnerColumn = fromPGSFieldParser
 
 fromPGSFieldParser :: FieldParser haskell -> FromField pgType haskell
-fromPGSFieldParser = QueryRunnerColumn (P.rmap (const ()) U.unpackspecField)
+fromPGSFieldParser = FromField
 
-queryRunner :: FromField a b -> FromFields (Column a) b
-queryRunner qrc = QueryRunner u (const (fieldWith fp)) (const 1)
-    where QueryRunnerColumn u fp = qrc
+fromFields :: FromField a b -> FromFields (Field a) b
+fromFields (FromField fp) = fieldParserFromFields fp
 
-queryRunnerColumnNullable :: FromField a b
-                          -> FromField (Nullable a) (Maybe b)
-queryRunnerColumnNullable qr =
-  QueryRunnerColumn (P.lmap C.unsafeCoerceColumn u) (fromField' fp)
-  where QueryRunnerColumn u fp = qr
-        fromField' :: FieldParser a -> FieldParser (Maybe a)
-        fromField' _ _ Nothing = pure Nothing
-        fromField' fp' f bs = fmap Just (fp' f bs)
+fieldParserFromFields :: FieldParser haskells -> FromFields (Field_ n a) haskells
+fieldParserFromFields fp = FromFields (P.rmap (const ()) U.unpackspecField) (const (fieldWith fp)) (const 1)
+
+{-# DEPRECATED queryRunner "Use fromFields instead.  Will be removed in version 0.10." #-}
+queryRunner :: FromField a b -> FromFields (Field a) b
+queryRunner = fromFields
+
+fromFieldsNullable :: FromField a b -> FromFields (FieldNullable a) (Maybe b)
+fromFieldsNullable (FromField fp) = fieldParserFromFields (optionalField fp)
 
 unsafeFromFieldRaw :: FromField a (PGS.Field, Maybe SBS.ByteString)
-unsafeFromFieldRaw = fieldParserQueryRunnerColumn (\f mdata -> pure (f, mdata))
+unsafeFromFieldRaw = fromPGSFieldParser (\f mdata -> pure (f, mdata))
 
 -- { Instances for automatic derivation
 
 instance DefaultFromField a b =>
-         DefaultFromField (Nullable a) (Maybe b) where
-  defaultFromField = queryRunnerColumnNullable defaultFromField
+         D.Default FromFields (Field a) b where
+  def = fromFields defaultFromField
 
 instance DefaultFromField a b =>
-         D.Default FromFields (Column a) b where
-  def = queryRunner defaultFromField
+         D.Default FromFields (FieldNullable a) (Maybe b)
+  where def = fromFieldsNullable defaultFromField
+
 
 -- }
 
@@ -181,16 +183,8 @@ instance DefaultFromField a b =>
 -- 3. If you have a more complicated case, but not a 'PGS.FromField' instance,
 -- write a 'FieldParser' for your type and use 'fromPGSFieldParser'.
 -- You can also add a 'FromField' instance using this.
-{-# DEPRECATED queryRunnerColumnDefault "Use defaultFromField instead.  It will be removed in 0.8" #-}
 class DefaultFromField sqlType haskellType where
-  queryRunnerColumnDefault :: FromField sqlType haskellType
-  queryRunnerColumnDefault = defaultFromField
   defaultFromField         :: FromField sqlType haskellType
-  defaultFromField = queryRunnerColumnDefault
-
-  {-# MINIMAL queryRunnerColumnDefault | defaultFromField #-}
-
-type QueryRunnerColumnDefault = DefaultFromField
 
 instance DefaultFromField sqlType haskellType
     => D.Default FromField sqlType haskellType where
@@ -266,96 +260,98 @@ instance DefaultFromField T.SqlCitext (CI.CI LT.Text) where
   defaultFromField = fromPGSFromField
 
 instance DefaultFromField T.SqlJson String where
-  defaultFromField = fieldParserQueryRunnerColumn jsonFieldParser
+  defaultFromField = fromPGSFieldParser jsonFieldParser
 
 instance DefaultFromField T.SqlJson ST.Text where
-  defaultFromField = fieldParserQueryRunnerColumn jsonFieldTextParser
+  defaultFromField = fromPGSFieldParser jsonFieldTextParser
 
 instance DefaultFromField T.SqlJson LT.Text where
-  defaultFromField = fieldParserQueryRunnerColumn jsonFieldLazyTextParser
+  defaultFromField = fromPGSFieldParser jsonFieldLazyTextParser
 
 instance DefaultFromField T.SqlJson SBS.ByteString where
-  defaultFromField = fieldParserQueryRunnerColumn jsonFieldByteParser
+  defaultFromField = fromPGSFieldParser jsonFieldByteParser
 
 instance DefaultFromField T.SqlJson LBS.ByteString where
-  defaultFromField = fieldParserQueryRunnerColumn jsonFieldLazyByteParser
+  defaultFromField = fromPGSFieldParser jsonFieldLazyByteParser
 
 instance DefaultFromField T.SqlJson Ae.Value where
   defaultFromField = fromPGSFromField
 
+instance (Ae.FromJSON a, Typeable a) => DefaultFromField T.SqlJson (Aeson a) where
+  defaultFromField = fromPGSFromField
+
 instance DefaultFromField T.SqlJsonb String where
-  defaultFromField = fieldParserQueryRunnerColumn jsonbFieldParser
+  defaultFromField = fromPGSFieldParser jsonbFieldParser
 
 instance DefaultFromField T.SqlJsonb ST.Text where
-  defaultFromField = fieldParserQueryRunnerColumn jsonbFieldTextParser
+  defaultFromField = fromPGSFieldParser jsonbFieldTextParser
 
 instance DefaultFromField T.SqlJsonb LT.Text where
-  defaultFromField = fieldParserQueryRunnerColumn jsonbFieldLazyTextParser
+  defaultFromField = fromPGSFieldParser jsonbFieldLazyTextParser
 
 instance DefaultFromField T.SqlJsonb SBS.ByteString where
-  defaultFromField = fieldParserQueryRunnerColumn jsonbFieldByteParser
+  defaultFromField = fromPGSFieldParser jsonbFieldByteParser
 
 instance DefaultFromField T.SqlJsonb LBS.ByteString where
-  defaultFromField = fieldParserQueryRunnerColumn jsonbFieldLazyByteParser
+  defaultFromField = fromPGSFieldParser jsonbFieldLazyByteParser
 
 instance DefaultFromField T.SqlJsonb Ae.Value where
   defaultFromField = fromPGSFromField
 
+instance (Ae.FromJSON a, Typeable a) => DefaultFromField T.SqlJsonb (Aeson a) where
+  defaultFromField = fromPGSFromField
+
 -- No CI String instance since postgresql-simple doesn't define FromField (CI String)
 
-arrayColumn :: Column (T.SqlArray a) -> Column a
-arrayColumn = C.unsafeCoerceColumn
-
 instance (Typeable b, DefaultFromField a b) =>
-         DefaultFromField (T.SqlArray a) [b] where
+         DefaultFromField (T.SqlArray_ NonNullable a) [b] where
   defaultFromField = fromFieldArray defaultFromField
 
-fromFieldArray :: Typeable h => FromField f h -> FromField (T.SqlArray f) [h]
-fromFieldArray q =
-  QueryRunnerColumn (P.lmap arrayColumn c)
-                    ((fmap . fmap . fmap) fromPGArray (pgArrayFieldParser f))
-  where QueryRunnerColumn c f = q
+fromFieldArray :: Typeable h => FromField f h -> FromField (T.SqlArray_ NonNullable f) [h]
+fromFieldArray (FromField f) =
+  fmap fromPGArray (FromField (pgArrayFieldParser f))
+
+fromFieldArrayNullable :: Typeable h => FromField f h -> FromField (T.SqlArray_ 'Nullable f) [Maybe h]
+fromFieldArrayNullable (FromField f) =
+  fmap fromPGArray (FromField (pgArrayFieldParser (optionalField f)))
 
 -- }
 
 instance (Typeable b, DefaultFromField a b) =>
-         DefaultFromField (T.PGRange a) (PGSR.PGRange b) where
+         DefaultFromField (T.SqlRange a) (PGSR.PGRange b) where
   defaultFromField = fromFieldRange defaultFromField
 
 fromFieldRange :: Typeable b
                => FromField a b
-               -> FromField (T.PGRange a) (PGSR.PGRange b)
-fromFieldRange off =
-  QueryRunnerColumn (P.lmap C.unsafeCoerceColumn c) (PGSR.fromFieldRange pff)
-  where QueryRunnerColumn c pff = off
+               -> FromField (T.SqlRange a) (PGSR.PGRange b)
+fromFieldRange (FromField pff) = FromField (PGSR.fromFieldRange pff)
 
 -- Boilerplate instances
 
 instance Functor (FromFields c) where
-  fmap f (QueryRunner u r b) = QueryRunner u ((fmap . fmap) f r) b
+  fmap f (FromFields u r b) = FromFields u ((fmap . fmap) f r) b
 
--- TODO: Seems like this one should be simpler!
 instance Applicative (FromFields c) where
-  pure = flip (QueryRunner (P.lmap (const ()) PP.empty)) (const 0)
+  pure = flip (FromFields (pure ())) (const 0)
          . pure
          . pure
-  QueryRunner uf rf bf <*> QueryRunner ux rx bx =
-    QueryRunner (P.dimap (\x -> (x,x)) (const ()) (uf PP.***! ux)) ((<*>) <$> rf <*> rx) (liftA2 (+) bf bx)
+  FromFields uf rf bf <*> FromFields ux rx bx =
+    FromFields (uf *> ux) ((<*>) <$> rf <*> rx) (liftA2 (+) bf bx)
 
 instance P.Profunctor FromFields where
-  dimap f g (QueryRunner u r b) =
-    QueryRunner (P.lmap f u) (P.dimap f (fmap g) r) (P.lmap f b)
+  dimap f g (FromFields u r b) =
+    FromFields (P.lmap f u) (P.dimap f (fmap g) r) (P.lmap f b)
 
 instance PP.ProductProfunctor FromFields where
   purePP = pure
   (****) = (<*>)
 
 instance PP.SumProfunctor FromFields where
-  f +++! g = QueryRunner (P.rmap (const ()) (fu PP.+++! gu))
+  f +++! g = FromFields (P.rmap (const ()) (fu PP.+++! gu))
                          (PackMap.eitherFunction fr gr)
                          (either fb gb)
-    where QueryRunner fu fr fb = f
-          QueryRunner gu gr gb = g
+    where FromFields fu fr fb = f
+          FromFields gu gr gb = g
 
 -- }
 
@@ -387,15 +383,6 @@ jsonbFieldLazyByteParser = jsonFieldTypeLazyByteParser (String.fromString "jsonb
 -- Eventually we want to move this to postgresql-simple
 --
 --     https://github.com/tomjaguarpaw/haskell-opaleye/issues/329
-jsonFieldTypeParser :: SBS.ByteString -> FieldParser String
-jsonFieldTypeParser = (fmap . fmap . fmap . fmap) IPT.strictDecodeUtf8 jsonFieldTypeByteParser
-
-jsonFieldTypeTextParser :: SBS.ByteString -> FieldParser ST.Text
-jsonFieldTypeTextParser = (fmap . fmap . fmap . fmap) STE.decodeUtf8 jsonFieldTypeByteParser
-
-jsonFieldTypeLazyTextParser :: SBS.ByteString -> FieldParser LT.Text
-jsonFieldTypeLazyTextParser = (fmap . fmap . fmap . fmap) (LTE.decodeUtf8 . LBS.fromStrict) jsonFieldTypeByteParser
-
 jsonFieldTypeByteParser :: SBS.ByteString -> FieldParser SBS.ByteString
 jsonFieldTypeByteParser jsonTypeName field mData = do
     ti <- typeInfo field
@@ -407,13 +394,26 @@ jsonFieldTypeByteParser jsonTypeName field mData = do
         Just bs -> pure bs
         _       -> returnError UnexpectedNull field ""
 
+withJsonByteStringParser :: (SBS.ByteString -> b)
+                         -> SBS.ByteString -> FieldParser b
+withJsonByteStringParser f = (fmap . fmap . fmap . fmap) f jsonFieldTypeByteParser
+
+jsonFieldTypeParser :: SBS.ByteString -> FieldParser String
+jsonFieldTypeParser = withJsonByteStringParser IPT.strictDecodeUtf8
+
+jsonFieldTypeTextParser :: SBS.ByteString -> FieldParser ST.Text
+jsonFieldTypeTextParser = withJsonByteStringParser STE.decodeUtf8
+
+jsonFieldTypeLazyTextParser :: SBS.ByteString -> FieldParser LT.Text
+jsonFieldTypeLazyTextParser = withJsonByteStringParser (LTE.decodeUtf8 . LBS.fromStrict)
+
 jsonFieldTypeLazyByteParser :: SBS.ByteString -> FieldParser LBS.ByteString
-jsonFieldTypeLazyByteParser = (fmap . fmap . fmap . fmap) LBS.fromStrict jsonFieldTypeByteParser
+jsonFieldTypeLazyByteParser = withJsonByteStringParser LBS.fromStrict
 
 -- }
 
 prepareRowParser :: FromFields columns haskells -> columns -> RowParser haskells
-prepareRowParser (QueryRunner _ rowParser numColumns) cols =
+prepareRowParser (FromFields _ rowParser numColumns) cols =
   if numColumns cols > 0
   then rowParser cols
   else (fromRow :: RowParser (Only Int)) *> rowParser cols
@@ -422,12 +422,14 @@ prepareRowParser (QueryRunner _ rowParser numColumns) cols =
      -- SELECT statement, since we can't select zero
      -- columns.  In that case we have to make sure we
      -- read a single Int.
+     --
+     -- See: Opaleye.Internal.Sql
 
 -- | Cursor within a transaction.
 data Cursor haskells = EmptyCursor | Cursor (RowParser haskells) PGSC.Cursor
 
 prepareQuery :: FromFields fields haskells -> S.Select fields -> (Maybe PGS.Query, RowParser haskells)
-prepareQuery qr@(QueryRunner u _ _) q = (sql, parser)
+prepareQuery qr@(FromFields u _ _) q = (sql, parser)
   where sql :: Maybe PGS.Query
         sql = fmap String.fromString (S.showSqlExplicit u q)
         -- FIXME: We're doing work twice here

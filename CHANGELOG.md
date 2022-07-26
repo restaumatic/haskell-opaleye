@@ -1,3 +1,84 @@
+## 0.9.2.0
+
+* Added `nullableToMaybeFields` and `maybeFieldsToNullable`
+
+## 0.9.1.0
+
+* Added `distinctOnExplicit` and `distinctOnByExplicit`
+
+* Added `label'` as a future replacement for `label`
+
+* Exported `SqlFractional` from `Opaleye.SqlTypes`
+
+* Fixed [a bug in
+  `forUpdate`](https://github.com/tomjaguarpaw/haskell-opaleye/issues/540)
+
+* The internal implementation of `QueryArr` has changed.
+
+## 0.9.0.0
+
+The switch from `Column` to `Field` is complete.  This is a small yet
+pervasive change.  To update your code please change all usages of
+`Column` as follows:
+
+* `Column` of a non-nullable type: to `Field`
+* `Column` of a nullable type: to `FieldNullable`
+* `Column` of a nullability-polymorphic type: to `Field_ n`
+
+For example
+
+* `Column SqlText` -> `Field SqlText`
+* `Column (Nullable SqlInt4)` -> `FieldNullable SqlInt4`
+* `Column a` -> `Field_ n a`
+
+This is the only change that has been made in this version, in order
+to ease user transition.
+
+* See also
+  <https://github.com/tomjaguarpaw/haskell-opaleye/issues/326>
+
+## 0.8.1.0
+
+* Cosmetic and re-export changes only.
+
+## 0.8.0.1
+
+* Support GHC 9.2
+
+## 0.8.0.0
+
+* Removed the following deprecated functions, types and modules
+
+  * `Opaleye.Query`, `Query`, `QueryArr`, `queryRunnerColumnDefault`
+  * `Opaleye.RunQuery`, `runQuery`, `runQueryFold`,
+    `queryRunnerColumn`
+  * `Opaleye.Constant`, `constant`
+  * The `Table` and `TableWithSchema` constructors
+  * `View`, `Writer`, `required`, `optional`, `readOnly`,
+    `tableColumn`, `queryTable`
+  * `Nulled`, `leftJoinInferrable`, `rightJoinInferrable`, `fullJoinInferrable`
+  * `unpackspecColumn`
+  * `TableField`
+  * `runInsertManyReturningOnConflictDoNothing`,
+    `runInsertManyReturning`, `runUpdateEasy`, `runUpdateReturning`,
+    `runDelete`
+  * `charLength`, `exists`, `notExists`, `inQuery`
+  * `PGIsJson`, `PGOrd`, `PG<typename>`
+  * `showSqlForPostgres`, `showSqlForPostgresUnopt`
+
+* Replaced the following old internal names
+
+  * `QueryRunnerColumnDefault` -> `DefaultFromField`
+  * `QueryRunnerColumn` -> `FromField` (type alias and constructor)
+  * `QueryRunner` -> `FromFields` (type alias and constructor)
+
+* `Opaleye.Join.optional` exported from top-level
+
+* Bug fix: `distinctOn` and `distinctOnBy` now return a single row if
+  zero columns are chosen to be distinct.
+
+* Add `runInsert`/`Update`/`Delete` without underscore
+
 ## 0.7.6.2
 
 Fix ISO 8601 date fomatting.  Thanks to Michal @kozak.

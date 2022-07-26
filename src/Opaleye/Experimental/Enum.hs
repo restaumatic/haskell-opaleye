@@ -11,19 +11,17 @@ module Opaleye.Experimental.Enum
     fromFieldToFieldsEnum,
   ) where
 
-import           Opaleye.Column (Column)
+import           Opaleye.Field (Field)
 import qualified Opaleye as O
-import qualified Opaleye.Internal.Inferrable as I
 import qualified Opaleye.Internal.RunQuery as RQ
 
 import           Data.ByteString.Char8 (unpack)
-import qualified Data.Profunctor.Product.Default as D
 import Text.PrettyPrint.HughesPJ ((<>), doubleQuotes, render, text)
 import Prelude hiding ((<>))
 
 data EnumMapper sqlEnum haskellSum = EnumMapper {
     enumFromField :: RQ.FromField sqlEnum haskellSum
-  , enumToFields :: O.ToFields haskellSum (Column sqlEnum)
+  , enumToFields :: O.ToFields haskellSum (Field sqlEnum)
   }
 
 -- | Create a mapping between a Postgres @ENUM@ type and a Haskell
@@ -82,10 +80,10 @@ data EnumMapper sqlEnum haskellSum = EnumMapper {
 --   defaultFromField = enumFromField sqlRatingMapper
 --
 -- instance rating ~ Rating
---   => D.Default (Inferrable O.FromFields) (O.Column SqlRating) rating where
+--   => D.Default (Inferrable O.FromField) SqlRating rating where
 --   def = Inferrable D.def
 --
--- instance D.Default O.ToFields Rating (O.Column SqlRating) where
+-- instance D.Default O.ToFields Rating (O.Field SqlRating) where
 --   def = enumToFields sqlRatingMapper
 -- @
 enumMapper :: String
@@ -142,11 +140,11 @@ enumMapper' type_ from to_ = EnumMapper {
          Just r -> r
          Nothing -> error ("Unexpected: " ++ unpack s)
 
--- | Use 'enumMapper' instead.  Will be deprecated in 0.8.
+{-# DEPRECATED fromFieldToFieldsEnum "Use 'enumMapper' instead.  Will be removed in 0.10." #-}
 fromFieldToFieldsEnum :: String
                       -> (String -> Maybe haskellSum)
                       -> (haskellSum -> String)
                       -> (RQ.FromField sqlEnum haskellSum,
-                          O.ToFields haskellSum (Column sqlEnum))
+                          O.ToFields haskellSum (Field sqlEnum))
 fromFieldToFieldsEnum type_ from to_ = (enumFromField e, enumToFields e)
   where e = enumMapper type_ from to_

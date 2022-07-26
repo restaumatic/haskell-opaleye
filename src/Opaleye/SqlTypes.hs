@@ -16,6 +16,10 @@ module Opaleye.SqlTypes (
   SqlInt8,
   SqlInt2,
   SqlFloat4,
+  -- ** Type classes
+  IC.SqlNum,
+  IC.SqlIntegral,
+  IC.SqlFractional,
   -- * Date and time
   -- ** Creating values
   sqlDay,
@@ -60,11 +64,14 @@ module Opaleye.SqlTypes (
   SqlText,
   SqlVarcharN,
   SqlCitext,
+  -- ** Type classes
+  IC.SqlString,
   -- * Array
   -- ** Creating values
   sqlArray,
   -- ** Types
   SqlArray,
+  SqlArray_,
   -- * Range
   -- ** Creating values
   sqlRange,
@@ -82,12 +89,11 @@ module Opaleye.SqlTypes (
   SqlUuid,
   SqlBytea,
   -- * @IsSqlType@
-  P.IsSqlType,
-  -- * Entire module
-  module Opaleye.SqlTypes,
+  P.IsSqlType(P.showSqlType),
   ) where
 
 import qualified Opaleye.Field   as F
+import qualified Opaleye.Internal.Column as IC
 import qualified Opaleye.Internal.PGTypesExternal as P
 import           Opaleye.Internal.PGTypesExternal (IsSqlType, IsRangeType)
 import           Opaleye.Internal.PGTypesExternal (SqlBool,
@@ -107,6 +113,7 @@ import           Opaleye.Internal.PGTypesExternal (SqlBool,
                                                    SqlUuid,
                                                    SqlCitext,
                                                    SqlArray,
+                                                   SqlArray_,
                                                    SqlBytea,
                                                    SqlJson,
                                                    SqlJsonb,
@@ -217,7 +224,7 @@ sqlLazyJSONB = P.pgLazyJSONB
 sqlValueJSONB :: Ae.ToJSON a => a -> F.Field SqlJsonb
 sqlValueJSONB = P.pgValueJSONB
 
-sqlArray :: IsSqlType b => (a -> F.Field b) -> [a] -> F.Field (SqlArray b)
+sqlArray :: IsSqlType b => (a -> F.Field_ n b) -> [a] -> F.Field (SqlArray_ n b)
 sqlArray = P.pgArray
 
 sqlRange :: IsRangeType b

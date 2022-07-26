@@ -1,10 +1,12 @@
+{-# OPTIONS_HADDOCK not-home #-}
+
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts, FlexibleInstances, MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Opaleye.Internal.Operators where
 
-import           Opaleye.Internal.Column (Column(Column))
+import           Opaleye.Internal.Column (Field_(Column))
 import qualified Opaleye.Internal.Column as C
 import qualified Opaleye.Internal.PrimQuery as PQ
 import qualified Opaleye.Internal.HaskellDB.PrimQuery as HPQ
@@ -15,6 +17,7 @@ import qualified Opaleye.Internal.Tag as Tag
 import qualified Opaleye.Internal.Unpackspec as U
 import qualified Opaleye.Internal.PGTypesExternal as T
 import qualified Opaleye.Field as F
+import           Opaleye.Field (Field)
 import qualified Opaleye.Select as S
 
 import           Data.Profunctor (Profunctor, dimap, lmap, rmap)
@@ -25,11 +28,11 @@ restrict :: S.SelectArr (F.Field T.SqlBool) ()
 restrict = QA.QueryArr f where
   -- A where clause can always refer to columns defined by the query
   -- it references so needs no special treatment on LATERAL.
-  f (Column predicate, t0) = ((), \_ -> PQ.restrict predicate, t0)
+  f (Column predicate) = pure ((), PQ.aRestrict predicate)
 
 infix 4 .==
 (.==) :: forall columns. D.Default EqPP columns columns
-      => columns -> columns -> Column T.PGBool
+      => columns -> columns -> Field T.PGBool
 (.==) = eqExplicit (D.def :: EqPP columns columns)
 
 infixr 2 .||
@@ -40,37 +43,37 @@ infixr 2 .||
 infixr 3 .&&
 
 -- | Boolean and
-(.&&) :: Column T.PGBool -> Column T.PGBool -> Column T.PGBool
+(.&&) :: Field T.PGBool -> Field T.PGBool -> Field T.PGBool
 (.&&) = C.binOp HPQ.OpAnd
 
 not :: F.Field T.SqlBool -> F.Field T.SqlBool
 not = C.unOp HPQ.OpNot
 
-newtype EqPP a b = EqPP (a -> a -> Column T.PGBool)
+newtype EqPP a b = EqPP (a -> a -> Field T.PGBool)
 
-eqPPField :: EqPP (Column a) ignored
+eqPPField :: EqPP (Field a) ignored
 eqPPField = EqPP C.unsafeEq
 
-eqExplicit :: EqPP columns a -> columns -> columns -> Column T.PGBool
+eqExplicit :: EqPP columns a -> columns -> columns -> Field T.PGBool
 eqExplicit (EqPP f) = f
 
-instance D.Default EqPP (Column a) (Column a) where
+instance D.Default EqPP (Field a) (Field a) where
   def = eqPPField
 
 
-newtype IfPP a b = IfPP (Column T.PGBool -> a -> a -> b)
+newtype IfPP a b = IfPP (Field T.PGBool -> a -> a -> b)
 
 ifExplict :: IfPP columns columns'
-          -> Column T.PGBool
+          -> Field T.PGBool
           -> columns
           -> columns
           -> columns'
 ifExplict (IfPP f) = f
 
-ifPPField :: IfPP (Column a) (Column a)
+ifPPField :: IfPP (Field_ n a) (Field_ n a)
 ifPPField = D.def
 
-instance D.Default IfPP (Column a) (Column a) where
+instance D.Default IfPP (Field_ n a) (Field_ n a) where
   def = IfPP C.unsafeIfThenElse
 
 
@@ -81,10 +84,10 @@ data RelExprMaker a b =
     , relExprCM  :: U.Unpackspec c b
     }
 
-relExprColumn :: RelExprMaker String (Column a)
+relExprColumn :: RelExprMaker String (Field_ n a)
 relExprColumn = RelExprMaker TM.tableColumn U.unpackspecField
 
-instance D.Default RelExprMaker String (Column a) where
+instance D.Default RelExprMaker String (Field_ n a) where
   def = relExprColumn
 
 runRelExprMaker :: RelExprMaker strings columns
@@ -100,11 +103,12 @@ relationValuedExprExplicit :: RelExprMaker strings columns
                            -> (a -> HPQ.PrimExpr)
                            -> QA.QueryArr a columns
 relationValuedExprExplicit rem_ strings pe =
-  QA.productQueryArr $ \(a, tag) ->
+  QA.productQueryArr' $ \a -> do
+    tag <- Tag.fresh
     let (primExprs, projcols) = runRelExprMaker rem_ tag strings
         primQ :: PQ.PrimQuery
         primQ = PQ.RelExpr (pe a) projcols
-    in (primExprs, primQ, Tag.next tag)
+    pure (primExprs, primQ)
 
 relationValuedExpr :: D.Default RelExprMaker strings columns
                    => strings

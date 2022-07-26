@@ -10,11 +10,6 @@ module Opaleye.Sql (
   -- * Anonymized
   showSqlAnonymized,
   showSqlAnonymizedExplicit,
-  -- * Deprecated functions
-  showSqlForPostgres,
-  showSqlForPostgresUnopt,
-  showSqlForPostgresExplicit,
-  showSqlForPostgresUnoptExplicit,
   ) where
 
 import qualified Opaleye.Internal.Unpackspec as U
@@ -76,21 +71,3 @@ showSqlUnoptExplicit = Pr.formatAndShowSQL SD.defaultSqlGenerator .: Q.runQueryA
 
 showSqlAnonymizedExplicit :: U.Unpackspec fields b -> S.Select fields -> Maybe String
 showSqlAnonymizedExplicit = showSqlExplicitWith SD.anonymizingSqlGenerator
-
-{-# DEPRECATED showSqlForPostgres "Will be removed in version 0.8.  Use 'showSql' instead." #-}
-showSqlForPostgres :: forall columns . D.Default U.Unpackspec columns columns =>
-                      S.Select columns -> Maybe String
-showSqlForPostgres = showSql
-
-{-# DEPRECATED showSqlForPostgresUnopt "Will be removed in version 0.8.  Use 'showSqlUnopt' instead." #-}
-showSqlForPostgresUnopt :: forall columns . D.Default U.Unpackspec columns columns =>
-                           S.Select columns -> Maybe String
-showSqlForPostgresUnopt = showSqlUnopt
-
-{-# DEPRECATED showSqlForPostgresExplicit "Will be removed in version 0.8.  Use 'showSqlExplicit' instead." #-}
-showSqlForPostgresExplicit :: U.Unpackspec columns b -> S.Select columns -> Maybe String
-showSqlForPostgresExplicit = showSqlExplicit
-
-{-# DEPRECATED showSqlForPostgresUnoptExplicit "Will be removed in version 0.8.  Use 'showSqlUnoptExplicit' instead." #-}
-showSqlForPostgresUnoptExplicit :: U.Unpackspec columns b -> S.Select columns -> Maybe String
-showSqlForPostgresUnoptExplicit = showSqlUnoptExplicit

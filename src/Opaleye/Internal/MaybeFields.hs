@@ -1,3 +1,5 @@
+{-# OPTIONS_HADDOCK not-home #-}
+
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE Arrows #-}
@@ -5,12 +7,10 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Opaleye.Internal.MaybeFields where
 
-import           Control.Applicative hiding (optional)
 import           Control.Arrow (returnA, (<<<), (>>>))
 
 import qualified Opaleye.Internal.Binary as B
@@ -32,7 +32,7 @@ import           Opaleye.Internal.Operators ((.&&), (.||), (.==), restrict, not,
                                              ifExplict, IfPP, EqPP(EqPP))
 import qualified Opaleye.Internal.Lateral
 import qualified Opaleye.SqlTypes
-import           Opaleye.SqlTypes (SqlBool, IsSqlType, SqlInt4)
+import           Opaleye.SqlTypes (SqlBool, IsSqlType)
 
 import           Control.Monad (replicateM_)
 
@@ -42,7 +42,9 @@ import qualified Data.Profunctor.Product.Default as PP
 
 import qualified Database.PostgreSQL.Simple.FromRow as PGSR
 
--- | The Opaleye analogue of 'Data.Maybe.Maybe'
+-- | The Opaleye analogue of 'Data.Maybe.Maybe'.  A value of type
+-- @MaybeFields a@ either contains a value of type @a@, or it contains
+-- nothing.
 data MaybeFields fields =
   MaybeFields {
     mfPresent :: Opaleye.Column.Column Opaleye.SqlTypes.SqlBool
@@ -105,13 +107,20 @@ matchMaybe mf f = maybeFields (f Nothing) (f . Just) mf
 fromMaybeFields :: PP.Default IfPP b b => b -> MaybeFields b -> b
 fromMaybeFields = fromMaybeFieldsExplicit PP.def
 
--- | The Opaleye analogue of 'Data.Maybe.maybeToList'
+-- | The Opaleye analogue of 'Data.Maybe.maybeToList'. Unless you are
+-- using arrow notation you'll probably find 'catMaybeFields' easier
+-- to use.
 maybeFieldsToSelect :: SelectArr (MaybeFields a) a
 maybeFieldsToSelect = proc mf -> do
   restrict -< mfPresent mf
   returnA -< mfFields mf
 
--- | The Opaleye analogue of 'Data.Maybe.catMaybes'
+-- | The Opaleye analogue of 'Data.Maybe.catMaybes'.  Most commonly
+-- you will want to use this at type
+--
+-- @
+-- catMaybeFields :: Select (MaybeFields a) -> Select a
+-- @
 catMaybeFields :: SelectArr i (MaybeFields a) -> SelectArr i a
 catMaybeFields = (>>> maybeFieldsToSelect)
 
@@ -137,16 +146,16 @@ optional :: SelectArr i a -> SelectArr i (MaybeFields a)
 optional = Opaleye.Internal.Lateral.laterally (optionalInternal (MaybeFields . isNotNull))
   where isNotNull = Opaleye.Internal.Operators.not . Opaleye.Field.isNull
 
-optionalInternal :: (Field (Opaleye.Column.Nullable SqlBool) -> a -> r) -> Select a -> Select r
-optionalInternal f query = IQ.leftJoinQueryArr $ \arg ->
+optionalInternal :: (Opaleye.Field.FieldNullable SqlBool -> a -> r) -> Select a -> Select r
+optionalInternal f query = IQ.leftJoinQueryArr' $ \() -> do
     -- This is basically a left join on TRUE, but Shane (@duairc)
     -- wrote it to ensure that we don't need an Unpackspec a a.
-    let (r, right, tag') = flip IQ.runSimpleQueryArr arg $ proc () -> do
+    let true = HPQ.ConstExpr (HPQ.BoolLit True)
+    (r, right) <- flip IQ.runSimpleQueryArr' () $ proc () -> do
           a <- query -< ()
-          true_ <- Rebind.rebind -< Opaleye.Column.toNullable (IC.Column true)
+          true_ <- Rebind.rebind -< Opaleye.Field.toNullable (IC.Column true)
           returnA -< f true_ a
-        true = HPQ.ConstExpr (HPQ.BoolLit True)
-    in (r, true, right, tag')
+    pure (r, true, right)
 
 
 -- | An example to demonstrate how the functionality of (lateral)
@@ -173,9 +182,25 @@ optionalRestrictOptional q = optional $ proc cond -> do
   restrict -< cond a
   returnA -< a
 
+-- | Convert @NULL@ to 'nothingFields' and non-@NULL@ to a 'justFields'
+nullableToMaybeFields :: Opaleye.Field.FieldNullable a -> MaybeFields (Field a)
+nullableToMaybeFields x = MaybeFields
+  { mfPresent = Opaleye.Internal.Operators.not (Opaleye.Field.isNull x)
+  , mfFields = unsafeFromNonNull x
+  }
+  where unsafeFromNonNull :: Opaleye.Field.FieldNullable a -> Field a
+        unsafeFromNonNull = Opaleye.Field.unsafeCoerceField
+
+-- | Convert 'nothingFields' to @NULL@ to a 'justFields' to non-@NULL@
+maybeFieldsToNullable :: MaybeFields (Field a) -> Opaleye.Field.FieldNullable a
+maybeFieldsToNullable x =
+  IC.unsafeIfThenElse (mfPresent x)
+                      (Opaleye.Field.toNullable (mfFields x))
+                      Opaleye.Field.null
+
 fromFieldsMaybeFields :: RQ.FromFields fields haskells
                       -> RQ.FromFields (MaybeFields fields) (Maybe haskells)
-fromFieldsMaybeFields (RQ.QueryRunner u p c) = RQ.QueryRunner u' p' c'
+fromFieldsMaybeFields (RQ.FromFields u p c) = RQ.FromFields u' p' c'
   where u' = () <$ productProfunctorMaybeFields U.unpackspecField u
 
         p' = \mf -> do
@@ -245,7 +270,7 @@ unWithNulls b (WithNulls d) =
 newtype WithNulls p a b =
   WithNulls (p (MaybeFields a) b)
 
--- | This is only safe if d is OK with having nulls passed through it
+-- | This is only safe if @b@ is OK with having nulls passed through it
 -- when they claim to be non-null.
 mapMaybeFieldsWithNulls :: PP.ProductProfunctor p
                         => p (Field SqlBool) (Field SqlBool)
@@ -255,17 +280,17 @@ mapMaybeFieldsWithNulls b d =
   MaybeFields <$> P.lmap mfPresent (withNullsField b)
               <*> P.lmap mfFields d
 
--- | This is only safe if d is OK with having nulls passed through it
+-- | This is only safe if @col@ is OK with having nulls passed through it
 -- when they claim to be non-null.
 withNullsField :: (IsSqlType a, P.Profunctor p)
-               => p (IC.Column a) (IC.Column a)
-               -> WithNulls p (IC.Column a) (IC.Column a)
+               => p (IC.Field_ n a) (IC.Field_ n a)
+               -> WithNulls p (IC.Field_ n a) (IC.Field_ n a)
 withNullsField col = result
   where result = WithNulls (P.lmap (\(MaybeFields b c) ->
                                       ifExplict PP.def b c nullC) col)
         nullC = IC.Column (V.nullPE (columnProxy result))
 
-        columnProxy :: f (IC.Column sqlType) -> Maybe sqlType
+        columnProxy :: f (IC.Field_ n sqlType) -> Maybe sqlType
         columnProxy _ = Nothing
 
 binaryspecMaybeFields
@@ -317,8 +342,8 @@ instance PP.Default EqPP a b
   => PP.Default EqPP (MaybeFields a) (MaybeFields b) where
   def = eqPPMaybeFields PP.def
 
-instance (P.Profunctor p, IsSqlType a, PP.Default p (IC.Column a) (IC.Column a))
-  => PP.Default (WithNulls p) (IC.Column a) (IC.Column a) where
+instance (P.Profunctor p, IsSqlType a, PP.Default p (IC.Field_ n a) (IC.Field_ n a))
+  => PP.Default (WithNulls p) (IC.Field_ n a) (IC.Field_ n a) where
   def = withNullsField PP.def
 
 instance PP.Default (WithNulls B.Binaryspec) a b
