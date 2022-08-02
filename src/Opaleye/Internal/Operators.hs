@@ -51,13 +51,13 @@ not = C.unOp HPQ.OpNot
 
 newtype EqPP a b = EqPP (a -> a -> Field T.PGBool)
 
-eqPPField :: EqPP (Field a) ignored
+eqPPField :: EqPP (Field_ n a) ignored
 eqPPField = EqPP C.unsafeEq
 
 eqExplicit :: EqPP columns a -> columns -> columns -> Field T.PGBool
 eqExplicit (EqPP f) = f
 
-instance D.Default EqPP (Field a) (Field a) where
+instance D.Default EqPP (Field_ n a) (Field_ n a) where
   def = eqPPField
 
 
