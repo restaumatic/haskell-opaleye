@@ -532,6 +532,15 @@ testStringArrayAggregate = it "" $
                                    minimum (map snd table6data))]
   where q = O.aggregate (PP.p2 (O.arrayAgg, O.min)) table6Q
 
+testStringArrayAggregateNoRows :: Test
+testStringArrayAggregateNoRows = it "" $
+  q `selectShouldReturnSorted` [(map fst table6data,
+                                   minimum (map snd table6data))]
+  where q = O.aggregate (PP.p2 (O.arrayAgg, O.min)) $ do
+                                                        rows <- table6Q
+                                                        O.where_ $ O.toFields False
+                                                        pure rows
+
 testValueJsonAggregate :: Test
 testValueJsonAggregate =
   it "" $
