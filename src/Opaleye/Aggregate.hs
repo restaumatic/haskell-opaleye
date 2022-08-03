@@ -123,7 +123,7 @@ sumInt8 :: Aggregator (F.Field T.SqlInt8) (F.Field T.SqlNumeric)
 sumInt8 = fmap F.unsafeCoerceField Opaleye.Aggregate.sum
 
 -- | Count the number of non-null rows in a group.
-count :: Aggregator (F.Field a) (F.Field T.SqlInt8)
+count :: Aggregator (F.Field_ n a) (F.Field T.SqlInt8)
 count = A.makeAggr HPQ.AggrCount
 
 -- | Count the number of rows in a group.  This 'Aggregator' is named
@@ -132,21 +132,21 @@ countStar :: Aggregator a (F.Field T.SqlInt8)
 countStar = lmap (const (0 :: F.Field T.SqlInt4)) count
 
 -- | Average of a group
-avg :: Aggregator (F.Field T.SqlFloat8) (F.Field T.SqlFloat8)
+avg :: Aggregator (F.Field_ n T.SqlFloat8) (F.Field_ n T.SqlFloat8)
 avg = A.makeAggr HPQ.AggrAvg
 
 -- | Maximum of a group
-max :: Ord.SqlOrd a => Aggregator (F.Field a) (F.Field a)
+max :: Ord.SqlOrd a => Aggregator (F.Field_ n a) (F.Field_ n a)
 max = A.makeAggr HPQ.AggrMax
 
 -- | Maximum of a group
-min :: Ord.SqlOrd a => Aggregator (F.Field a) (F.Field a)
+min :: Ord.SqlOrd a => Aggregator (F.Field_ n a) (F.Field_ n a)
 min = A.makeAggr HPQ.AggrMin
 
-boolOr :: Aggregator (F.Field T.SqlBool) (F.Field T.SqlBool)
+boolOr :: Aggregator (F.Field_ n T.SqlBool) (F.Field_ n T.SqlBool)
 boolOr = A.makeAggr HPQ.AggrBoolOr
 
-boolAnd :: Aggregator (F.Field T.SqlBool) (F.Field T.SqlBool)
+boolAnd :: Aggregator (F.Field_ n T.SqlBool) (F.Field_ n T.SqlBool)
 boolAnd = A.makeAggr HPQ.AggrBoolAnd
 
 arrayAgg :: Aggregator (F.Field a) (F.Field (T.SqlArray a))
